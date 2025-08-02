@@ -1,0 +1,61 @@
+spring:
+  application:
+    name: tabia-backend
+  
+  datasource:
+    url: jdbc:postgresql://localhost:5432/tabia_db
+    username: ${DB_USERNAME:postgres}
+    password: ${DB_PASSWORD:password}
+    driver-class-name: org.postgresql.Driver
+  
+  jpa:
+    hibernate:
+      ddl-auto: update
+    show-sql: false
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.PostgreSQLDialect
+        format_sql: true
+    database-platform: org.hibernate.dialect.PostgreSQLDialect
+
+  security:
+    user:
+      name: ${ADMIN_USERNAME:admin}
+      password: ${ADMIN_PASSWORD:admin}
+
+server:
+  port: ${PORT:8080}
+  servlet:
+    context-path: /api
+
+# Firebase Configuration
+firebase:
+  project-id: ${FIREBASE_PROJECT_ID:your-project-id}
+  private-key-id: ${FIREBASE_PRIVATE_KEY_ID}
+  private-key: ${FIREBASE_PRIVATE_KEY}
+  client-email: ${FIREBASE_CLIENT_EMAIL}
+  client-id: ${FIREBASE_CLIENT_ID}
+  auth-uri: https://accounts.google.com/o/oauth2/auth
+  token-uri: https://oauth2.googleapis.com/token
+  auth-provider-x509-cert-url: https://www.googleapis.com/oauth2/v1/certs
+  client-x509-cert-url: ${FIREBASE_CLIENT_X509_CERT_URL}
+
+# Logging
+logging:
+  level:
+    com.tabia: DEBUG
+    org.springframework.security: DEBUG
+    org.hibernate.SQL: DEBUG
+    org.hibernate.type.descriptor.sql.BasicBinder: TRACE
+  pattern:
+    console: "%d{yyyy-MM-dd HH:mm:ss} - %msg%n"
+
+# CORS Configuration
+cors:
+  allowed-origins: 
+    - "chrome-extension://*"
+    - "http://localhost:3000"
+    - "http://localhost:5173"
+  allowed-methods: GET,POST,PUT,DELETE,OPTIONS
+  allowed-headers: "*"
+  allow-credentials: true 
