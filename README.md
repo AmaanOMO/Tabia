@@ -9,7 +9,7 @@ Tabia is a Chrome Extension that helps users save, restore, and organize browsin
 ### Frontend (Chrome Extension)
 - **React** + **Tailwind CSS**
 - **Manifest V3** (Chrome APIs)
-- **Firebase Auth** (Gmail login only)
+- **Firebase Auth**
 - **Axios** for backend API calls
 
 ### Backend
