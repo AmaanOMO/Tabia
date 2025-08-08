@@ -14,7 +14,14 @@ function AppContent() {
             <div className="p-4">
                 <div className="flex items-center justify-between mb-4">
                     <h1 className="text-xl font-bold text-gray-800">Tabia</h1>
-                    <div className="flex items-center space-x-2">
+                    <div className="flex items-center space-x-3">
+                        {currentUser?.photoURL && (
+                            <img 
+                                src={currentUser.photoURL} 
+                                alt="Profile" 
+                                className="w-8 h-8 rounded-full"
+                            />
+                        )}
                         <span className="text-sm text-gray-600">
                             {currentUser?.displayName || currentUser?.email}
                         </span>
