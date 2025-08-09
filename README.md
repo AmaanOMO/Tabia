@@ -4,20 +4,25 @@
 
 Tabia is a Chrome Extension that helps users save, restore, and organize browsing sessions into named collections. It's like a productivity-focused "Notion for tabs," with future integration of AI assistance (Tabi) and Stripe billing for premium features.
 
-## 🧱 Tech Stack
+## 🚀 Versions
 
-### Frontend (Chrome Extension)
-- **React** + **Tailwind CSS**
-- **Manifest V3** (Chrome APIs)
-- **Firebase Auth**
-- **Axios** for backend API calls
+Tabia has two implementations to showcase different architectural approaches:
 
-### Backend
-- **Spring Boot** (Java)
-- **PostgreSQL** (hosted)
-- **JPA** for ORM
-- **Firebase Admin SDK** for ID token verification
-- **Stripe** (planned for Pro billing)
+### **v2 (Current - Supabase)** 🔥
+- **Frontend**: React + Tailwind CSS + Manifest V3
+- **Backend**: Supabase (Auth + PostgreSQL + Realtime + RLS)
+- **Hosting**: $0 (Supabase free tier)
+- **Real-time**: Built-in PostgreSQL change streams
+- **Auth**: Supabase Auth (Google OAuth)
+
+### **v1 (Portfolio - Spring Boot)** 📚
+- **Frontend**: React + Tailwind CSS + Manifest V3  
+- **Backend**: Spring Boot + PostgreSQL + Firebase Auth
+- **Hosting**: Requires server infrastructure
+- **Real-time**: Custom WebSocket implementation
+- **Auth**: Firebase Auth + JWT verification
+
+*Both versions maintain identical UI/UX and API shapes for seamless compatibility.*
 
 ### AI (Planned)
 - **OpenAI GPT-4o**
@@ -38,7 +43,14 @@ Tabia is a Chrome Extension that helps users save, restore, and organize browsin
 
 ## 🔐 Auth Flow
 
-- User signs in with Firebase Auth (Google login)
+### v2 (Supabase)
+- User signs in with Supabase Auth (Google OAuth)
+- Frontend communicates directly with Supabase using authenticated client
+- User data automatically synced to `users` table with RLS policies
+- All session data secured with Row Level Security
+
+### v1 (Spring Boot - Reference)
+- User signs in with Firebase Auth (Google login)  
 - Frontend includes ID token in `Authorization: Bearer <token>` headers
 - Spring Boot verifies ID token and stores UID + email in users table
 - All session data is scoped to that UID
