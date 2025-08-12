@@ -1,5 +1,6 @@
 import { supabase } from '../data/supabaseClient';
 import { TabDTO, SessionDTO } from '../types/dto';
+import { logger } from '../common/logger'
 
 export interface SessionChannelHandlers {
   onTabInserted?: (tab: TabDTO) => void;
@@ -13,7 +14,7 @@ export interface SessionChannelHandlers {
  * Returns an unsubscribe function
  */
 export function joinSession(sessionId: string, handlers: SessionChannelHandlers) {
-  console.log(`🔗 Joining real-time session: ${sessionId}`);
+  logger.log(`🔗 Joining real-time session: ${sessionId}`);
 
   const channel = supabase.channel(`session:${sessionId}`)
     // Tab insertions
@@ -25,7 +26,7 @@ export function joinSession(sessionId: string, handlers: SessionChannelHandlers)
         filter: `session_id=eq.${sessionId}` 
       },
       (payload) => {
-        console.log('📝 Tab inserted:', payload.new);
+        logger.log('📝 Tab inserted:', payload.new);
         const tab = transformTabFromDatabase(payload.new as any);
         handlers.onTabInserted?.(tab);
       }
@@ -39,7 +40,7 @@ export function joinSession(sessionId: string, handlers: SessionChannelHandlers)
         filter: `session_id=eq.${sessionId}` 
       },
       (payload) => {
-        console.log('✏️ Tab updated:', payload.new);
+        logger.log('✏️ Tab updated:', payload.new);
         const tab = transformTabFromDatabase(payload.new as any);
         handlers.onTabUpdated?.(tab);
       }
@@ -53,7 +54,7 @@ export function joinSession(sessionId: string, handlers: SessionChannelHandlers)
         filter: `session_id=eq.${sessionId}` 
       },
       (payload) => {
-        console.log('🗑️ Tab deleted:', payload.old);
+        logger.log('🗑️ Tab deleted:', payload.old);
         const tabId = (payload.old as any).id;
         handlers.onTabDeleted?.(tabId);
       }
@@ -67,18 +68,18 @@ export function joinSession(sessionId: string, handlers: SessionChannelHandlers)
         filter: `id=eq.${sessionId}` 
       },
       (payload) => {
-        console.log('🔄 Session updated:', payload.new);
+        logger.log('🔄 Session updated:', payload.new);
         const sessionPatch = transformSessionPatchFromDatabase(payload.new as any);
         handlers.onSessionUpdated?.(sessionPatch);
       }
     )
     .subscribe((status) => {
-      console.log(`📡 Session channel status: ${status} for session ${sessionId}`);
+      logger.log(`📡 Session channel status: ${status} for session ${sessionId}`);
     });
 
   // Return unsubscribe function
   return () => {
-    console.log(`🔌 Leaving real-time session: ${sessionId}`);
+    logger.log(`🔌 Leaving real-time session: ${sessionId}`);
     supabase.removeChannel(channel);
   };
 }
@@ -116,7 +117,7 @@ function transformSessionPatchFromDatabase(dbSession: any): Partial<SessionDTO> 
  * Note: This requires Supabase Presence feature
  */
 export function joinSessionPresence(sessionId: string, userInfo: { id: string; name?: string; email?: string }) {
-  console.log(`👥 Joining session presence: ${sessionId}`);
+  logger.log(`👥 Joining session presence: ${sessionId}`);
 
   const presenceChannel = supabase.channel(`presence:${sessionId}`, {
     config: {
@@ -129,13 +130,13 @@ export function joinSessionPresence(sessionId: string, userInfo: { id: string; n
   presenceChannel
     .on('presence', { event: 'sync' }, () => {
       const state = presenceChannel.presenceState();
-      console.log('👥 Presence sync:', state);
+      logger.log('👥 Presence sync:', state);
     })
     .on('presence', { event: 'join' }, ({ key, newPresences }) => {
-      console.log('👋 User joined:', key, newPresences);
+      logger.log('👋 User joined:', key, newPresences);
     })
     .on('presence', { event: 'leave' }, ({ key, leftPresences }) => {
-      console.log('👋 User left:', key, leftPresences);
+      logger.log('👋 User left:', key, leftPresences);
     })
     .subscribe(async (status) => {
       if (status === 'SUBSCRIBED') {
@@ -149,7 +150,7 @@ export function joinSessionPresence(sessionId: string, userInfo: { id: string; n
     });
 
   return () => {
-    console.log(`🔌 Leaving session presence: ${sessionId}`);
+    logger.log(`🔌 Leaving session presence: ${sessionId}`);
     supabase.removeChannel(presenceChannel);
   };
 }
@@ -176,17 +177,17 @@ export function subscribeToBroadcast(
   event: string, 
   callback: (payload: any) => void
 ) {
-  console.log(`📻 Subscribing to broadcast: ${event} for session ${sessionId}`);
+  logger.log(`📻 Subscribing to broadcast: ${event} for session ${sessionId}`);
 
   const channel = supabase.channel(`broadcast:${sessionId}:${event}`)
     .on('broadcast', { event }, (payload) => {
-      console.log(`📻 Broadcast received: ${event}`, payload);
+      logger.log(`📻 Broadcast received: ${event}`, payload);
       callback(payload);
     })
     .subscribe();
 
   return () => {
-    console.log(`📻 Unsubscribing from broadcast: ${event} for session ${sessionId}`);
+    logger.log(`📻 Unsubscribing from broadcast: ${event} for session ${sessionId}`);
     supabase.removeChannel(channel);
   };
 }
