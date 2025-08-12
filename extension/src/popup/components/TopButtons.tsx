@@ -17,7 +17,7 @@ export default function TopButtons({
   const buttonRef = useRef<HTMLButtonElement>(null)
   const timeoutRef = useRef<NodeJS.Timeout | null>(null)
 
-  // Auto-close dropdown after delay when mouse leaves both button and dropdown
+  // Auto-close dropdown when mouse leaves both button and dropdown
   useEffect(() => {
     if (!open) return
 
@@ -30,7 +30,7 @@ export default function TopButtons({
         if (!isHoveringDropdown) {
           setOpen(false)
         }
-      }, 500)
+      }, 100) // Reduced delay for better responsiveness
     }
 
     const handleMouseEnter = () => {

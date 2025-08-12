@@ -84,7 +84,7 @@ export default function App() {
       const tabs = await capture(scope)
       if (!tabs) return
 
-      const name = prompt('Enter a name for this session:')
+      const name = prompt('Tabia: Smart Tab Session Manager\n\nEnter a name for this session:')
       if (!name) {
         logger.log('❌ No session name provided')
         setToast({ text: 'Session name is required' })
@@ -121,6 +121,9 @@ export default function App() {
     }
   }
 
+  const [showTabSaveModal, setShowTabSaveModal] = useState(false)
+  const [capturedTab, setCapturedTab] = useState<Pick<TabDTO,'title'|'url'|'tabIndex'|'windowIndex'> | null>(null)
+
   const handleSaveTab = async () => {
     try {
       logger.log('📱 Capturing tabs...')
@@ -135,35 +138,50 @@ export default function App() {
         return
       }
 
-      const name = prompt('Enter a name for this tab:')
-      if (!name) return
+      // Store the captured tab and show session selection modal
+      setCapturedTab({
+        title: tabs[0].title,
+        url: tabs[0].url,
+        tabIndex: tabs[0].tabIndex,
+        windowIndex: tabs[0].windowIndex
+      })
+      setShowTabSaveModal(true)
+    } catch (error) {
+      logger.error('❌ Error capturing tab:', error)
+      setToast({ text: 'Failed to capture tab' })
+      setTimeout(() => setToast(null), 3000)
+    }
+  }
 
-      const payload = {
-        name,
-        isWindowSession: true,
-        tabs: [{
-          title: tabs[0].title,
-          url: tabs[0].url,
-          tabIndex: tabs[0].tabIndex,
-          windowIndex: tabs[0].windowIndex
-        }]
-      }
+  const saveTabToSession = async (sessionId: string) => {
+    if (!capturedTab) return
 
-      logger.log('📦 Creating session payload:', payload)
-      const created = await API.createSession(payload)
+    try {
+      const newTab = await API.addTab(sessionId, {
+        title: capturedTab.title,
+        url: capturedTab.url,
+        tabIndex: capturedTab.tabIndex,
+        windowIndex: capturedTab.windowIndex
+      })
 
-      if (created) {
-        logger.log('✅ Session created:', created)
-        setToast({ text: `Tab saved to "${created.name}"` })
-        setSessions([{...created, scope: 'WINDOW'}, ...sessions])
+      if (newTab) {
+        logger.log('✅ Tab added to session:', newTab)
+        setToast({ text: 'Tab added to session!' })
+        
+        // Refresh sessions to show the new tab
+        const updatedSessions = await API.listSessions()
+        setSessions(updatedSessions.map(s => ({...s, scope: s.isWindowSession ? 'WINDOW' : 'ALL_WINDOWS'})))
+        
+        setShowTabSaveModal(false)
+        setCapturedTab(null)
         setTimeout(() => setToast(null), 2200)
       } else {
-        setToast({ text: 'Failed to save tab' })
+        setToast({ text: 'Failed to add tab to session' })
         setTimeout(() => setToast(null), 3000)
       }
     } catch (error) {
-      logger.error('❌ Error saving tab:', error)
-      setToast({ text: 'Failed to save tab' })
+      logger.error('❌ Error adding tab to session:', error)
+      setToast({ text: 'Failed to add tab to session' })
       setTimeout(() => setToast(null), 3000)
     }
   }
@@ -238,6 +256,16 @@ export default function App() {
     }))
   }
 
+  async function reorderSessions(orderedIds: string[]) {
+    // Optimistic local reorder
+    const sessionMap = new Map(sessions.map(s => [s.id, s]))
+    const reordered = orderedIds.map(id => sessionMap.get(id)!).filter(Boolean)
+    setSessions(reordered)
+    
+    // TODO: Implement API call for session reordering when backend supports it
+    // await API.reorderSessions(orderedIds)
+  }
+
   return (
     <div className="min-h-[500px] bg-gradient-to-br from-gray-50 to-white">
       {/* Header */}
@@ -301,12 +329,38 @@ export default function App() {
           </div>
         ) : (
           <>
+            {/* FAVORITE SESSIONS */}
+            {filtered.filter(s => s.isStarred).length > 0 && (
+              <>
+                <div className="flex items-center gap-2">
+                  <div className="w-1 h-4 bg-yellow-400 rounded-full"></div>
+                  <div className="text-xs font-semibold text-yellow-600 uppercase tracking-wide">FAVORITE SESSIONS</div>
+                </div>
+                <div className="space-y-2">
+                  {filtered.filter(s => s.isStarred).map(s => (
+                    <SessionCard
+                      key={s.id}
+                      s={s}
+                      onOpen={openSession}
+                      onToggleStar={toggleStar}
+                      onDelete={deleteSession}
+                      onDeleteTab={deleteTab}
+                      onReorderTabs={reorderTabs}
+                      onReorderSessions={reorderSessions}
+                      user={user}
+                    />
+                  ))}
+                </div>
+              </>
+            )}
+
+            {/* REGULAR SESSIONS */}
             <div className="flex items-center gap-2">
               <div className="w-1 h-4 bg-gray-300 rounded-full"></div>
               <div className="text-xs font-semibold text-gray-600 uppercase tracking-wide">SESSIONS</div>
             </div>
             <div className="space-y-2">
-              {filtered.map(s => (
+              {filtered.filter(s => !s.isStarred).map(s => (
                 <SessionCard
                   key={s.id}
                   s={s}
@@ -315,6 +369,8 @@ export default function App() {
                   onDelete={deleteSession}
                   onDeleteTab={deleteTab}
                   onReorderTabs={reorderTabs}
+                  onReorderSessions={reorderSessions}
+                  user={user}
                 />
               ))}
               {filtered.length === 0 && (
@@ -339,6 +395,97 @@ export default function App() {
           actionLabel={toast.undo ? 'Undo' : undefined}
           onAction={toast.undo}
         />
+      )}
+
+      {/* Tab Save Modal */}
+      {showTabSaveModal && capturedTab && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-xl shadow-lg p-6 max-w-md w-full mx-4">
+            <div className="flex items-center gap-3 mb-4">
+              <div className="w-8 h-8 rounded-lg bg-green-100 flex items-center justify-center">
+                <svg className="w-5 h-5 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 7h.01M7 3h5c.512 0 1.024.195 1.414.586l7 7a2 2 0 010 2.828l-7 7a1.994 1.994 1 013 12V7a4 4 0 014-4z" />
+                </svg>
+              </div>
+              <div>
+                <div className="font-semibold text-gray-800 text-lg">Save Tab</div>
+                <div className="text-sm text-gray-500">Select a session to add this tab to</div>
+              </div>
+            </div>
+            
+            <div className="mb-4">
+              <div className="text-sm text-gray-600 mb-2">Tab to save:</div>
+              <div className="bg-gray-50 rounded-lg p-3">
+                <div className="font-medium text-gray-800 text-sm truncate">{capturedTab.title}</div>
+                <div className="text-xs text-gray-500 truncate">{capturedTab.url}</div>
+              </div>
+            </div>
+
+            <div className="mb-6">
+              <div className="text-sm text-gray-600 mb-2">Choose session:</div>
+              <div className="space-y-2 max-h-48 overflow-y-auto">
+                {sessions.length === 0 ? (
+                  <div className="text-center py-4 text-gray-500 text-sm">
+                    No sessions available. Create a session first.
+                  </div>
+                ) : (
+                  sessions.map(session => (
+                    <button
+                      key={session.id}
+                      onClick={() => saveTabToSession(session.id)}
+                      onMouseDown={(e) => {
+                        const target = e.currentTarget
+                        target.style.transform = 'scale(0.95)'
+                        target.style.transition = 'transform 0.1s ease'
+                      }}
+                      onMouseUp={(e) => {
+                        const target = e.currentTarget
+                        target.style.transform = 'scale(1)'
+                        target.style.transition = 'transform 0.1s ease'
+                      }}
+                      onMouseLeave={(e) => {
+                        const target = e.currentTarget
+                        target.style.transform = 'scale(1)'
+                        target.style.transition = 'transform 0.1s ease'
+                      }}
+                      className="w-full text-left p-3 rounded-lg border border-gray-200 hover:border-blue-300 hover:bg-blue-50 transition-colors"
+                    >
+                      <div className="flex items-center gap-2">
+                        {/* Scope Icon */}
+                        <div className="flex items-center gap-1">
+                          {session.scope === 'WINDOW' ? (
+                            <div className="w-4 h-4 bg-blue-500 rounded-sm"></div>
+                          ) : (
+                            <div className="flex gap-0.5">
+                              <div className="w-3 h-3 bg-blue-500 rounded-sm"></div>
+                              <div className="w-3 h-3 bg-blue-500 rounded-sm"></div>
+                            </div>
+                          )}
+                        </div>
+                        <div className="font-medium text-gray-800 text-sm">{session.name}</div>
+                      </div>
+                      <div className="text-xs text-gray-500 ml-6">
+                        {session.tabs?.length || 0} tabs
+                      </div>
+                    </button>
+                  ))
+                )}
+              </div>
+            </div>
+
+            <div className="flex gap-3">
+              <button
+                onClick={() => {
+                  setShowTabSaveModal(false)
+                  setCapturedTab(null)
+                }}
+                className="flex-1 px-4 py-2 text-gray-600 border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   )

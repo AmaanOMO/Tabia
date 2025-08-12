@@ -160,21 +160,14 @@ const LocalStorageAPI = {
     const session = sessions.find(s => s.id === sessionId)
     if (!session || !session.tabs) return
     
-    // Group tabs by window
-    const tabsByWindow = new Map<number, string[]>()
-    for (const tab of session.tabs) {
-      if (!tabsByWindow.has(tab.windowIndex)) {
-        tabsByWindow.set(tab.windowIndex, [])
-      }
-      tabsByWindow.get(tab.windowIndex)!.push(tab.url)
-    }
+    // Extract URLs from session tabs
+    const urls = session.tabs.map(tab => tab.url)
     
-    // Create windows for each group
-    for (const [windowIndex, urls] of tabsByWindow) {
-      if (urls.length > 0) {
-        await chrome.windows.create({ url: urls })
-      }
-    }
+    // Send message to background script to restore in current window
+    await chrome.runtime.sendMessage({
+      type: 'RESTORE_SESSION',
+      urls: urls
+    })
   }
 }
 
