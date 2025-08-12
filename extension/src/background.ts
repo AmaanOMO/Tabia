@@ -56,6 +56,58 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         }
         sendResponse({ ok: true })
       }
+
+      if (msg.type === 'RESTORE_SESSION_IN_CURRENT_WINDOW') {
+        logger.log('🔄 Restoring session in current window...')
+        const currentWindow = await chrome.windows.getCurrent({ populate: true })
+        
+        // Close all existing tabs in current window
+        if (currentWindow.tabs) {
+          for (const tab of currentWindow.tabs) {
+            if (tab.id) {
+              await chrome.tabs.remove(tab.id)
+            }
+          }
+        }
+        
+        // Create new tabs with session URLs
+        const urls = msg.urls as string[]
+        if (urls.length > 0) {
+          await chrome.tabs.create({ url: urls[0], active: true })
+          for (let i = 1; i < urls.length; i++) {
+            await chrome.tabs.create({ url: urls[i], active: false })
+          }
+        }
+        
+        sendResponse({ ok: true })
+      }
+
+      if (msg.type === 'RESTORE_SESSION') {
+        logger.log('🔄 Restoring session...')
+        const urls = msg.urls as string[]
+        
+        if (urls && urls.length > 0) {
+          // Get current window
+          const currentWindow = await chrome.windows.getCurrent({ populate: true })
+          
+          // Close all existing tabs in current window
+          if (currentWindow.tabs) {
+            for (const tab of currentWindow.tabs) {
+              if (tab.id) {
+                await chrome.tabs.remove(tab.id)
+              }
+            }
+          }
+          
+          // Create new tabs with session URLs
+          await chrome.tabs.create({ url: urls[0], active: true })
+          for (let i = 1; i < urls.length; i++) {
+            await chrome.tabs.create({ url: urls[i], active: false })
+          }
+        }
+        
+        sendResponse({ ok: true })
+      }
     } catch (error) {
       logger.error('❌ Background script error:', error)
       sendResponse({ error: error instanceof Error ? error.message : String(error) })
