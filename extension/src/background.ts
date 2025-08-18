@@ -137,45 +137,68 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   }
 
   if (msg?.type === 'RESTORE_SESSION') {
-    console.log('[bg] Restoring session...');
-    
+    console.log('[bg] Restoring session…');
+
     (async () => {
       try {
-        const currentWindow = await chrome.windows.getCurrent();
-        
-        // Close existing tabs in current window
-        const existingTabs = await chrome.tabs.query({ windowId: currentWindow.id });
-        for (const tab of existingTabs) {
-          if (tab.id) {
-            await chrome.tabs.remove(tab.id);
+        const urls: string[] = (msg.tabs || [])
+          .map((t: any) => t?.url)
+          .filter((u: any): u is string => !!u);
+
+        const win = await chrome.windows.getLastFocused({ windowTypes: ['normal'] });
+        if (!win?.id) throw new Error('No normal window found');
+        const windowId = win.id;
+
+        const beforeTabs = await chrome.tabs.query({ windowId });
+        console.log('[bg] Existing tabs BEFORE:', beforeTabs.map(t => ({ id: t.id, url: t.url, pinned: t.pinned })));
+
+        // Choose/create keeper
+        const keeper = beforeTabs.find(t => !t.pinned) ?? beforeTabs[0];
+        const keeperId = keeper?.id ?? (await chrome.tabs.create({ windowId, url: 'chrome://newtab/' })).id!;
+        const keepIds = new Set<number>([keeperId]);
+
+        // Put first URL in keeper, create the rest and record their IDs
+        if (urls.length > 0) {
+          await chrome.tabs.update(keeperId, { url: urls[0], active: true });
+          for (let i = 1; i < urls.length; i++) {
+            const created = await chrome.tabs.create({ windowId, url: urls[i], active: false });
+            if (created?.id) keepIds.add(created.id);
           }
+        } else {
+          await chrome.tabs.update(keeperId, { url: 'chrome://newtab/', active: true });
         }
 
-        // Open new tabs
-        for (const tab of msg.tabs) {
-          await chrome.tabs.create({ 
-            url: tab.url, 
-            windowId: currentWindow.id,
-            active: false 
-          });
+        // Re-query after creation
+        const afterTabs = await chrome.tabs.query({ windowId });
+        console.log('[bg] Tabs AFTER creating:', afterTabs.map(t => ({ id: t.id, url: t.url, pinned: t.pinned })));
+
+        // Remove anything that is:
+        //  - not pinned
+        //  - and NOT in the keepIds allow-list
+        const toRemove = afterTabs
+          .filter(t => !t.pinned && !keepIds.has(t.id!))
+          .map(t => t.id!)
+          .filter(Boolean);
+
+        // Safety: never delete all non-pinned tabs
+        const nonPinnedCount = afterTabs.filter(t => !t.pinned).length;
+        if (toRemove.length >= nonPinnedCount) {
+          console.warn('[bg] Refusing to remove tabs to avoid closing the window.');
+        } else if (toRemove.length) {
+          await chrome.tabs.remove(toRemove);
         }
 
-        // Make first tab active
-        if (msg.tabs.length > 0) {
-          const newTabs = await chrome.tabs.query({ windowId: currentWindow.id });
-          if (newTabs[0]?.id) {
-            await chrome.tabs.update(newTabs[0].id, { active: true });
-          }
-        }
+        const finalTabs = await chrome.tabs.query({ windowId });
+        console.log('[bg] FINAL tabs:', finalTabs.map(t => ({ id: t.id, url: t.url, pinned: t.pinned })));
 
         sendResponse({ success: true });
-      } catch (error) {
-        console.error('[bg] Error restoring session:', error);
-        sendResponse({ success: false, error: String(error) });
+      } catch (e: any) {
+        console.error('[bg] restore error:', e);
+        sendResponse({ success: false, error: String(e?.message || e) });
       }
     })();
-    
-    return true; // keep channel open
+
+    return true;
   }
 
   if (msg?.type === 'PING') {
