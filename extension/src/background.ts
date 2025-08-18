@@ -3,6 +3,15 @@ import { supabase } from './bg/supabaseClient.js';
 
 console.log('[bg] loaded');
 
+// Test if background script is working
+chrome.runtime.onStartup.addListener(() => {
+  console.log('[bg] Extension started');
+});
+
+chrome.runtime.onInstalled.addListener(() => {
+  console.log('[bg] Extension installed');
+});
+
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   console.log('[bg] Received message:', msg.type);
   
