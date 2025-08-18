@@ -1,137 +1,44 @@
 import React, { useState, useRef, useEffect } from 'react'
 
 export default function TopButtons({
-  onSaveSessionScope,
+  onSaveSession,
   onSaveTab,
   onShowHelp
 }: {
-  onSaveSessionScope: (scope: 'WINDOW'|'ALL_WINDOWS') => void
+  onSaveSession: () => void
   onSaveTab: () => void
   onShowHelp: () => void
 }) {
-  const [open, setOpen] = useState(false)
   const [activeButton, setActiveButton] = useState<string | null>(null)
-  const [isHoveringDropdown, setIsHoveringDropdown] = useState(false)
   const [helpActive, setHelpActive] = useState(false)
-  const dropdownRef = useRef<HTMLDivElement>(null)
-  const buttonRef = useRef<HTMLButtonElement>(null)
-  const timeoutRef = useRef<NodeJS.Timeout | null>(null)
 
-  // Auto-close dropdown when mouse leaves both button and dropdown
-  useEffect(() => {
-    if (!open) return
 
-    const handleMouseLeave = () => {
-      if (timeoutRef.current) {
-        clearTimeout(timeoutRef.current)
-      }
-      
-      timeoutRef.current = setTimeout(() => {
-        if (!isHoveringDropdown) {
-          setOpen(false)
-        }
-      }, 100) // Reduced delay for better responsiveness
-    }
-
-    const handleMouseEnter = () => {
-      if (timeoutRef.current) {
-        clearTimeout(timeoutRef.current)
-      }
-    }
-
-    const button = buttonRef.current
-    const dropdown = dropdownRef.current
-
-    if (button) {
-      button.addEventListener('mouseleave', handleMouseLeave)
-      button.addEventListener('mouseenter', handleMouseEnter)
-    }
-
-    if (dropdown) {
-      dropdown.addEventListener('mouseleave', handleMouseLeave)
-      dropdown.addEventListener('mouseenter', handleMouseEnter)
-    }
-
-    return () => {
-      if (button) {
-        button.removeEventListener('mouseleave', handleMouseLeave)
-        button.removeEventListener('mouseenter', handleMouseEnter)
-      }
-      if (dropdown) {
-        dropdown.removeEventListener('mouseleave', handleMouseLeave)
-        dropdown.removeEventListener('mouseenter', handleMouseEnter)
-      }
-      if (timeoutRef.current) {
-        clearTimeout(timeoutRef.current)
-      }
-    }
-  }, [open, isHoveringDropdown])
   
   return (
     <div className="flex gap-3 justify-center">
-      <div className="relative">
-        <button
-          ref={buttonRef}
-          onClick={() => setOpen(v => !v)}
-          onMouseDown={() => setActiveButton('session')}
-          onMouseUp={() => setActiveButton(null)}
-          onMouseLeave={() => setActiveButton(null)}
-          className={`w-24 h-20 bg-white rounded-xl shadow-sm border-2 border-gray-200 flex flex-col items-center justify-center transition-all duration-200 hover:shadow-md hover:border-blue-300 hover:scale-105 active:scale-95 ${
-            activeButton === 'session' ? 'bg-blue-50 border-blue-400 shadow-md' : ''
-          }`}
-          title="Save Session"
-        >
-          <div className={`w-8 h-8 rounded-lg flex items-center justify-center transition-colors ${
-            activeButton === 'session' ? 'bg-blue-500' : 'bg-blue-100'
-          }`}>
-            <svg className={`w-4 h-4 transition-colors ${
-              activeButton === 'session' ? 'text-white' : 'text-blue-600'
-            }`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
-            </svg>
-          </div>
-          <span className={`text-xs mt-1.5 font-medium transition-colors ${
-            activeButton === 'session' ? 'text-blue-700' : 'text-gray-700'
-          }`}>Save Session</span>
-        </button>
-        
-        {open && (
-          <>
-            {/* Safe zone bridge between button and dropdown */}
-            <div 
-              className="absolute z-10 w-24 h-2 bg-transparent"
-              onMouseEnter={() => setIsHoveringDropdown(true)}
-              onMouseLeave={() => setIsHoveringDropdown(false)}
-            />
-            
-            <div 
-              ref={dropdownRef}
-              className="absolute z-10 mt-2 w-52 bg-white rounded-xl shadow-lg border border-gray-200 p-3"
-              onMouseEnter={() => setIsHoveringDropdown(true)}
-              onMouseLeave={() => setIsHoveringDropdown(false)}
-            >
-              <button
-                className="w-full text-left px-4 py-3 rounded-lg hover:bg-blue-50 hover:scale-105 active:scale-95 transition-all duration-200 text-sm text-gray-700 hover:text-blue-700"
-                onClick={() => { setOpen(false); onSaveSessionScope('WINDOW') }}
-              >
-                <div className="flex items-center gap-3">
-                  <div className="w-2 h-2 rounded-full bg-blue-500"></div>
-                  <span>Save current window</span>
-                </div>
-              </button>
-              <button
-                className="w-full text-left px-4 py-3 rounded-lg hover:bg-blue-50 hover:scale-105 active:scale-95 transition-all duration-200 text-sm text-gray-700 hover:text-blue-700"
-                onClick={() => { setOpen(false); onSaveSessionScope('ALL_WINDOWS') }}
-              >
-                <div className="flex items-center gap-3">
-                  <div className="w-2 h-2 rounded-full bg-blue-500"></div>
-                  <span>Save all windows</span>
-                </div>
-              </button>
-            </div>
-          </>
-        )}
-      </div>
+      <button
+        onClick={onSaveSession}
+        onMouseDown={() => setActiveButton('session')}
+        onMouseUp={() => setActiveButton(null)}
+        onMouseLeave={() => setActiveButton(null)}
+        className={`w-24 h-20 bg-white rounded-xl shadow-sm border-2 border-gray-200 flex flex-col items-center justify-center transition-all duration-200 hover:shadow-md hover:border-blue-300 hover:scale-105 active:scale-95 ${
+          activeButton === 'session' ? 'bg-blue-50 border-blue-400 shadow-md' : ''
+        }`}
+        title="Save Session"
+      >
+        <div className={`w-8 h-8 rounded-lg flex items-center justify-center transition-colors ${
+          activeButton === 'session' ? 'bg-blue-500' : 'bg-blue-100'
+        }`}>
+          <svg className={`w-4 h-4 transition-colors ${
+            activeButton === 'session' ? 'text-white' : 'text-blue-600'
+          }`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
+          </svg>
+        </div>
+        <span className={`text-xs mt-1.5 font-medium transition-colors ${
+          activeButton === 'session' ? 'text-blue-700' : 'text-gray-700'
+        }`}>Save Session</span>
+      </button>
 
               <button
           onClick={onSaveTab}

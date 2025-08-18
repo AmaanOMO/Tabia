@@ -37,7 +37,7 @@ for select using (
   owner_id = auth_uid()
   or exists (
     select 1 from collaborators c 
-    where c.session_id = id and c.user_id = auth_uid()
+    where c.session_id = sessions.id and c.user_id = auth_uid()
   )
 );
 
@@ -100,21 +100,21 @@ for all using (
 create policy collab_select on collaborators
 for select using (
   exists (
-    select 1 from sessions s where s.id = session_id
-      and (s.owner_id = auth_uid() or user_id = auth_uid())
+    select 1 from sessions s where s.id = collaborators.session_id
+      and (s.owner_id = auth_uid() or collaborators.user_id = auth_uid())
   )
 );
 
 -- INSERT: Only session owner can add collaborators
 create policy collab_insert_owner on collaborators
 for insert with check (
-  exists (select 1 from sessions s where s.id = session_id and s.owner_id = auth_uid())
+  exists (select 1 from sessions s where s.id = collaborators.session_id and s.owner_id = auth_uid())
 );
 
 -- DELETE: Only session owner can remove collaborators
 create policy collab_delete_owner on collaborators
 for delete using (
-  exists (select 1 from sessions s where s.id = session_id and s.owner_id = auth_uid())
+  exists (select 1 from sessions s where s.id = collaborators.session_id and s.owner_id = auth_uid())
 );
 
 -- =============================================================================
@@ -124,7 +124,7 @@ for delete using (
 -- SELECT: Session owner can list their invites
 create policy invites_select_owner on invites
 for select using (
-  exists (select 1 from sessions s where s.id = session_id and s.owner_id = auth_uid())
+  exists (select 1 from sessions s where s.id = invites.session_id and s.owner_id = auth_uid())
 );
 
 -- TEMP policy: allow any logged-in user to read invites by code for acceptance
@@ -135,11 +135,11 @@ for select using (auth_uid() is not null);
 -- INSERT: Only session owner can create invites
 create policy invites_insert_owner on invites
 for insert with check (
-  exists (select 1 from sessions s where s.id = session_id and s.owner_id = auth_uid())
+  exists (select 1 from sessions s where s.id = invites.session_id and s.owner_id = auth_uid())
 );
 
 -- UPDATE: Only session owner can update invites (mark as used, etc.)
 create policy invites_update_owner on invites
 for update using (
-  exists (select 1 from sessions s where s.id = session_id and s.owner_id = auth_uid())
+  exists (select 1 from sessions s where s.id = invites.session_id and s.owner_id = auth_uid())
 );

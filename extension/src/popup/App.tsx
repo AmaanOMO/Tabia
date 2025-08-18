@@ -7,6 +7,8 @@ import SessionCard from './components/SessionCard'
 import { Toast } from './components/Toast'
 import { registerShortcuts } from '../common/shortcuts'
 import { logger } from '../common/logger'
+// import { upsertSelfUser } from '../auth/supabaseAuth' // REMOVED - contains background code
+import { supabase } from './supabaseClient'
 
 type SessionVM = SessionDTO & { scope: 'WINDOW'|'ALL_WINDOWS' }
 
@@ -16,17 +18,85 @@ export default function App() {
   const [query, setQuery] = useState('')
   const [toast, setToast] = useState<null | {text: string, undo?: () => void}>(null)
   const [showHelp, setShowHelp] = useState(false)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+  const [showSignin, setShowSignin] = useState(false)
 
   useEffect(() => {
-    API.me().then(r => setUser(r.user)).catch(() => {})
-    API.listSessions().then((ss: SessionDTO[]) => {
-      setSessions(ss.map(s => ({...s, scope: s.isWindowSession ? 'WINDOW' : 'ALL_WINDOWS'})))
-    })
-  }, [])
+    let unsub = supabase.auth.onAuthStateChange(async (_evt, session) => {
+      if (session) {
+        // Persist token for REST API
+        try { localStorage.setItem('supabase_token', session.access_token); } catch {}
+        setShowSignin(false);
+        setError(null);
+        await afterLoginLoad(); // your me(), listSessions(), etc.
+      } else {
+        try { localStorage.removeItem('supabase_token'); } catch {}
+        // <-- important when user signed out or first open
+        setShowSignin(true);
+        setLoading(false);
+      }
+    }).data.subscription;
+
+    (async () => {
+      // On open, see if we already have a session
+      const { data: { session } } = await supabase.auth.getSession();
+      if (session) {
+        try { localStorage.setItem('supabase_token', session.access_token); } catch {}
+        setShowSignin(false);
+        await afterLoginLoad(); // will flip loading -> false in finally
+      } else {
+        try { localStorage.removeItem('supabase_token'); } catch {}
+        setShowSignin(true);
+        setLoading(false);      // <-- important
+      }
+    })();
+
+    return () => unsub?.unsubscribe();
+  }, []);
+
+  async function afterLoginLoad() {
+    try {
+      setLoading(true);
+      // await upsertSelfUser();            // REMOVED - was background code
+      const userData = await API.me();
+      setUser(userData.user);
+      const sessionsData = await API.listSessions();
+      setSessions(sessionsData.map(s => ({ ...s, scope: s.isWindowSession ? 'WINDOW' : 'ALL_WINDOWS' })));
+      
+      // Auto-scroll to newest session
+      if (sessionsData.length > 0) {
+        setTimeout(() => {
+          const newestSession = document.querySelector('[data-session-id]');
+          if (newestSession) {
+            newestSession.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          }
+        }, 100);
+      }
+    } catch (error) {
+      console.error('Failed to load data after login:', error);
+      setError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  // Listen for auth state changes and persist session
+  useEffect(() => {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      chrome.storage.local.set({ session: session || null });
+      try {
+        if (session) localStorage.setItem('supabase_token', session.access_token);
+        else localStorage.removeItem('supabase_token');
+      } catch {}
+    });
+
+    return () => subscription.unsubscribe();
+  }, []);
 
   useEffect(() => {
     return registerShortcuts({
-      onSaveSession: () => handleSaveSession('WINDOW'),
+      onSaveSession: () => handleSaveSession(),
       onSaveTab: handleSaveTab
     })
   }, [sessions])
@@ -77,45 +147,66 @@ export default function App() {
     }
   }
 
-  const handleSaveSession = async (scope: 'WINDOW' | 'ALL_WINDOWS') => {
+  const handleSaveSession = async () => {
     try {
-      logger.log('🔄 Starting session save...', { scope })
+      logger.log('🔄 Starting session save...')
       
-      const tabs = await capture(scope)
+      const tabs = await capture('WINDOW')
       if (!tabs) return
 
-      const name = prompt('Tabia: Smart Tab Session Manager\n\nEnter a name for this session:')
-      if (!name) {
-        logger.log('❌ No session name provided')
-        setToast({ text: 'Session name is required' })
-        return
-      }
+      // Store the captured tabs for the modal
+      setCapturedTabs(tabs)
+      setShowSessionNameModal(true)
+    } catch (error) {
+      logger.error('❌ Error capturing tabs:', error)
+      setToast({ text: 'Failed to capture tabs' })
+      setTimeout(() => setToast(null), 3000)
+    }
+  }
 
-      logger.log('📝 Session name:', name)
-
+  const handleCreateSession = async () => {
+    if (!sessionName.trim()) return
+    
+    try {
+      logger.log('📝 Creating session with name:', sessionName.trim())
+      
       // Create session
       const created = await API.createSession({
-        name,
-        isWindowSession: scope === 'WINDOW',
-        tabs: tabs.map((tab: Pick<TabDTO,'title'|'url'|'tabIndex'|'windowIndex'>) => ({
+        name: sessionName.trim(),
+        isWindowSession: true,
+        tabs: capturedTabs?.map((tab: Pick<TabDTO,'title'|'url'|'tabIndex'|'windowIndex'>) => ({
           title: tab.title,
           url: tab.url,
           tabIndex: tab.tabIndex,
           windowIndex: tab.windowIndex
-        }))
+        })) || []
       })
 
       if (created) {
         logger.log('✅ Session created:', created)
         setToast({ text: `Session "${created.name}" saved!` })
-        setSessions([{...created, scope}, ...sessions])
+        setSessions([{...created, scope: 'WINDOW'}, ...sessions])
+        
+        // Auto-scroll to the newest session (which is now at the top)
+        setTimeout(() => {
+          const mainContent = document.querySelector('.overflow-y-auto') as HTMLElement
+          if (mainContent) {
+            mainContent.scrollTop = 0 // Scroll to top to show newest session
+          }
+        }, 100) // Small delay to ensure DOM update
+        
         setTimeout(() => setToast(null), 2500)
       } else {
         setToast({ text: 'Failed to save session' })
         setTimeout(() => setToast(null), 3000)
       }
+      
+      // Reset and close modal
+      setSessionName('')
+      setShowSessionNameModal(false)
+      setCapturedTabs(null)
     } catch (error) {
-      logger.error('❌ Error saving session:', error)
+      logger.error('❌ Error creating session:', error)
       setToast({ text: `Failed to save session: ${error instanceof Error ? error.message : String(error)}` })
       setTimeout(() => setToast(null), 5000)
     }
@@ -123,6 +214,51 @@ export default function App() {
 
   const [showTabSaveModal, setShowTabSaveModal] = useState(false)
   const [capturedTab, setCapturedTab] = useState<Pick<TabDTO,'title'|'url'|'tabIndex'|'windowIndex'> | null>(null)
+  const [showSessionNameModal, setShowSessionNameModal] = useState(false)
+  const [sessionName, setSessionName] = useState('')
+  const [capturedTabs, setCapturedTabs] = useState<Pick<TabDTO,'title'|'url'|'tabIndex'|'windowIndex'>[] | null>(null)
+  const [showDeleteConfirmModal, setShowDeleteConfirmModal] = useState(false)
+  const [sessionToDelete, setSessionToDelete] = useState<SessionVM | null>(null)
+
+  const handleSignInClick = async () => {
+    setLoading(true);
+    setError(null);
+    setToast({ text: 'Starting Google sign-in...' });
+    
+    try {
+      const resp = await new Promise<any>((resolve) => {
+        try {
+          chrome.runtime.sendMessage({ type: 'START_GOOGLE_OAUTH' }, (r) => {
+            const err = chrome.runtime.lastError;
+            if (err) resolve({ ok: false, error: err.message });
+            else resolve(r);
+          });
+        } catch (e: any) {
+          resolve({ ok: false, error: String(e?.message || e) });
+        }
+      });
+
+      setLoading(false);
+      if (!resp?.ok) {
+        setError(resp?.error || 'Authentication failed.');
+        setToast(null);
+        return;
+      }
+      // Success path: onAuthStateChange will fire; as a fallback, read session:
+      const { data: { session } } = await supabase.auth.getSession();
+      if (session) {
+        setToast({ text: 'Signed in! Loading your sessions...' });
+        await afterLoginLoad();
+        setShowSignin(false);
+        setTimeout(() => setToast(null), 2000);
+      }
+    } catch (error) {
+      setLoading(false);
+      setError('Failed to start authentication. Please try again.');
+      setToast(null);
+      console.error('Sign-in error:', error);
+    }
+  };
 
   const handleSaveTab = async () => {
     try {
@@ -187,73 +323,113 @@ export default function App() {
   }
 
   async function openSession(sessionId: string) {
-    await API.restoreSession(sessionId)
-    setToast({ text: 'Restoring session…' })
-    setTimeout(() => setToast(null), 1800)
+    try {
+      logger.log('🔄 Opening session:', sessionId)
+      await API.restoreSession(sessionId)
+      logger.log('✅ Session restoration message sent to background script')
+      setToast({ text: 'Restoring session…' })
+      setTimeout(() => setToast(null), 1800)
+    } catch (error) {
+      logger.error('❌ Error opening session:', error)
+      setToast({ text: 'Failed to open session' })
+      setTimeout(() => setToast(null), 3000)
+    }
   }
 
   async function toggleStar(sessionId: string, to: boolean) {
-    await API.starSession(sessionId, to)
-    setSessions(sessions.map(s => s.id === sessionId ? ({...s, isStarred: to}) : s))
+    try {
+      // Update local state optimistically
+      setSessions(sessions.map(s => s.id === sessionId ? ({...s, isStarred: to}) : s))
+      
+      // Update in Supabase
+      await API.updateSession(sessionId, { isStarred: to })
+      logger.log('✅ Session starred status updated:', { sessionId, isStarred: to })
+    } catch (error) {
+      logger.error('❌ Error updating star status:', error)
+      // Revert local state on error
+      setSessions(sessions.map(s => s.id === sessionId ? ({...s, isStarred: !to}) : s))
+      setToast({ text: 'Failed to update session' })
+      setTimeout(() => setToast(null), 3000)
+    }
   }
 
   async function deleteSession(sessionId: string) {
-    const removed = sessions.find(s => s.id === sessionId)
-    setSessions(sessions.filter(s => s.id !== sessionId))
-    setToast({
-      text: `Session deleted`,
-      undo: async () => {
-        if (!removed) return
-        // naive undo: recreate from existing data
-        const recreated = await API.createSession({
-          name: removed.name,
-          isWindowSession: removed.scope === 'WINDOW',
-          tabs: (removed.tabs ?? []).map(t => ({
-            title: t.title, url: t.url, tabIndex: t.tabIndex, windowIndex: t.windowIndex
-          }))
-        })
-        setSessions([ { ...recreated, scope: removed.scope }, ...sessions ])
-        setToast(null)
-      }
-    })
-    await API.deleteSession(sessionId)
-    setTimeout(() => setToast(null), 5000)
+    const session = sessions.find(s => s.id === sessionId)
+    if (session) {
+      setSessionToDelete(session)
+      setShowDeleteConfirmModal(true)
+    }
+  }
+
+  async function confirmDeleteSession() {
+    if (!sessionToDelete) return
+    
+    try {
+      await API.deleteSession(sessionToDelete.id)
+      setSessions(sessions.filter(s => s.id !== sessionToDelete.id))
+      setToast({ text: `Session "${sessionToDelete.name}" deleted` })
+      setTimeout(() => setToast(null), 3000)
+    } catch (error) {
+      logger.error('❌ Error deleting session:', error)
+      setToast({ text: 'Failed to delete session' })
+      setTimeout(() => setToast(null), 3000)
+    }
+    
+    // Close modal and reset
+    setShowDeleteConfirmModal(false)
+    setSessionToDelete(null)
   }
 
   async function deleteTab(tabId: string) {
     let backup: {sessionId: string, tab: TabDTO} | null = null
-    setSessions(sessions.map(s => {
-      const t = (s.tabs ?? []).find(tt => tt.id === tabId)
-      if (t) backup = { sessionId: s.id, tab: t }
-      return {...s, tabs: (s.tabs ?? []).filter(tt => tt.id !== tabId)}
-    }))
+    
+    // Find the session and tab to backup
+    for (const session of sessions) {
+      const tab = session.tabs?.find(t => t.id === tabId)
+      if (tab) {
+        backup = { sessionId: session.id, tab }
+        break
+      }
+    }
+    
+    // Remove tab from local state
+    setSessions(sessions.map(s => ({
+      ...s, 
+      tabs: (s.tabs ?? []).filter(tt => tt.id !== tabId)
+    })))
+    
     setToast({
       text: 'Tab removed',
       undo: async () => {
         if (!backup) return
-        await API.addTab(backup.sessionId, {
-          title: backup.tab.title, url: backup.tab.url,
-          tabIndex: backup.tab.tabIndex, windowIndex: backup.tab.windowIndex
-        })
-        // refresh
-        const ss = await API.listSessions()
-        setSessions(ss.map(s => ({...s, scope: s.isWindowSession ? 'WINDOW' : 'ALL_WINDOWS'})))
-        setToast(null)
+        try {
+          await API.addTab(backup.sessionId, {
+            title: backup.tab.title, url: backup.tab.url,
+            tabIndex: backup.tab.tabIndex, windowIndex: backup.tab.windowIndex
+          })
+          // refresh
+          const ss = await API.listSessions()
+          setSessions(ss.map(s => ({...s, scope: s.isWindowSession ? 'WINDOW' : 'ALL_WINDOWS'})))
+          setToast(null)
+        } catch (error) {
+          logger.error('❌ Error restoring tab:', error)
+          setToast({ text: 'Failed to restore tab' })
+          setTimeout(() => setToast(null), 3000)
+        }
       }
     })
-    await API.deleteTab(tabId)
+    
+    try {
+      if (backup) {
+        await API.deleteTab(backup.sessionId, tabId)
+      }
+    } catch (error) {
+      logger.error('❌ Error deleting tab:', error)
+      setToast({ text: 'Failed to delete tab' })
+      setTimeout(() => setToast(null), 3000)
+    }
+    
     setTimeout(() => setToast(null), 5000)
-  }
-
-  async function reorderTabs(sessionId: string, orderedIds: string[]) {
-    await API.reorderTabs(sessionId, orderedIds)
-    // optimistic local reorder
-    setSessions(sessions.map(s => {
-      if (s.id !== sessionId || !s.tabs) return s
-      const map = new Map(s.tabs.map(t => [t.id, t]))
-      const reordered = orderedIds.map(id => map.get(id)!).filter(Boolean)
-      return {...s, tabs: reordered}
-    }))
   }
 
   async function reorderSessions(orderedIds: string[]) {
@@ -263,11 +439,75 @@ export default function App() {
     setSessions(reordered)
     
     // TODO: Implement API call for session reordering when backend supports it
-    // await API.reorderSessions(orderedIds)
+    // For now, just log the reorder
+    logger.log('📋 Sessions reordered locally:', orderedIds)
+  }
+
+  // Show loading state
+  if (loading) {
+    return (
+      <div className="w-[420px] h-[570px] bg-gradient-to-br from-gray-50 to-white flex items-center justify-center">
+        <div className="text-center">
+          <div className="w-8 h-8 border-4 border-blue-200 border-t-blue-600 rounded-full animate-spin mx-auto mb-3"></div>
+          <div className="text-gray-600 text-sm">Loading Tabia...</div>
+        </div>
+      </div>
+    )
+  }
+
+
+
+  // Show sign-in state
+  if (showSignin) {
+    return (
+      <div className="w-[420px] h-[570px] bg-gradient-to-br from-gray-50 to-white flex items-center justify-center">
+        <div className="text-center px-6">
+          <div className="w-16 h-16 mx-auto mb-4 rounded-full bg-blue-100 flex items-center justify-center">
+            <svg className="w-8 h-8 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9m-9 9a9 9 0 019-9" />
+            </svg>
+          </div>
+          <div className="text-gray-800 font-medium text-base mb-2">Welcome to Tabia</div>
+          <div className="text-gray-500 text-sm mb-6">Sign in with Google to start managing your tab sessions</div>
+          <button
+            onClick={handleSignInClick}
+            className="px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors text-sm font-medium flex items-center gap-2 mx-auto"
+          >
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9m-9 9a9 9 0 019-9" />
+            </svg>
+            Sign in with Google
+          </button>
+        </div>
+      </div>
+    )
+  }
+
+  // Show error state
+  if (error) {
+    return (
+      <div className="w-[420px] h-[570px] bg-gradient-to-br from-gray-50 to-white flex items-center justify-center">
+        <div className="text-center px-6">
+          <div className="w-12 h-12 mx-auto mb-3 rounded-xl bg-red-100 flex items-center justify-center">
+            <svg className="w-6 h-6 text-red-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L3.34 16.5c-.77.833.192 2.5 1.732 2.5z" />
+            </svg>
+          </div>
+          <div className="text-gray-800 font-medium text-sm mb-2">Something went wrong</div>
+          <div className="text-gray-500 text-xs mb-4">{error}</div>
+          <button
+            onClick={() => window.location.reload()}
+            className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors text-sm"
+          >
+            Try Again
+          </button>
+        </div>
+      </div>
+    )
   }
 
   return (
-    <div className="min-h-[500px] bg-gradient-to-br from-gray-50 to-white">
+    <div className="w-[420px] h-[570px] bg-gradient-to-br from-gray-50 to-white overflow-hidden">
       {/* Header */}
       <div className="px-5 py-3 border-b border-gray-200 bg-white">
         <div className="flex items-center justify-between">
@@ -280,14 +520,25 @@ export default function App() {
               <div className="text-xs font-semibold text-gray-800">{user?.email || '—'}</div>
             </div>
           </div>
-          <div className="text-base font-bold text-blue-600">Tabia</div>
+          <div className="text-right">
+            <button
+              onClick={() => window.close()}
+              className="w-6 h-6 mb-1 flex items-center justify-center text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-full transition-colors duration-200"
+              title="Close popup"
+            >
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            </button>
+            <div className="text-base font-bold text-blue-600">Tabia</div>
+          </div>
         </div>
       </div>
 
       {/* Main Content */}
-      <div className="px-5 py-4 space-y-4">
+      <div className="px-5 py-4 space-y-4 h-full overflow-y-auto">
         <TopButtons
-          onSaveSessionScope={handleSaveSession}
+          onSaveSession={handleSaveSession}
           onSaveTab={handleSaveTab}
           onShowHelp={() => setShowHelp(v => !v)}
         />
@@ -336,19 +587,23 @@ export default function App() {
                   <div className="w-1 h-4 bg-yellow-400 rounded-full"></div>
                   <div className="text-xs font-semibold text-yellow-600 uppercase tracking-wide">FAVORITE SESSIONS</div>
                 </div>
-                <div className="space-y-2">
-                  {filtered.filter(s => s.isStarred).map(s => (
-                    <SessionCard
-                      key={s.id}
-                      s={s}
-                      onOpen={openSession}
-                      onToggleStar={toggleStar}
-                      onDelete={deleteSession}
-                      onDeleteTab={deleteTab}
-                      onReorderTabs={reorderTabs}
-                      onReorderSessions={reorderSessions}
-                      user={user}
-                    />
+                <div className="space-y-0">
+                  {filtered.filter(s => s.isStarred).map((s, index) => (
+                    <div key={s.id}>
+                      {/* Blue separator line above */}
+                      <div className="h-px bg-blue-200 mb-2"></div>
+                      <SessionCard
+                        s={s}
+                        onOpen={openSession}
+                        onToggleStar={toggleStar}
+                        onDelete={deleteSession}
+                        onDeleteTab={deleteTab}
+                        onReorderSessions={reorderSessions}
+                        user={user}
+                      />
+                      {/* Blue separator line below */}
+                      <div className="h-px bg-blue-200 mt-2"></div>
+                    </div>
                   ))}
                 </div>
               </>
@@ -359,19 +614,24 @@ export default function App() {
               <div className="w-1 h-4 bg-gray-300 rounded-full"></div>
               <div className="text-xs font-semibold text-gray-600 uppercase tracking-wide">SESSIONS</div>
             </div>
-            <div className="space-y-2">
-              {filtered.filter(s => !s.isStarred).map(s => (
-                <SessionCard
-                  key={s.id}
-                  s={s}
-                  onOpen={openSession}
-                  onToggleStar={toggleStar}
-                  onDelete={deleteSession}
-                  onDeleteTab={deleteTab}
-                  onReorderTabs={reorderTabs}
-                  onReorderSessions={reorderSessions}
-                  user={user}
-                />
+            <div className="space-y-0">
+              {filtered.filter(s => !s.isStarred).map((s, index) => (
+                <div key={s.id}>
+                  {/* Blue separator line above */}
+                  <div className="h-px bg-blue-200 mb-2"></div>
+                  <SessionCard
+                    s={s}
+                    onOpen={openSession}
+                    onToggleStar={toggleStar}
+                    onDelete={deleteSession}
+                    onDeleteTab={deleteTab}
+                    
+                    onReorderSessions={reorderSessions}
+                    user={user}
+                  />
+                  {/* Blue separator line below */}
+                  <div className="h-px bg-blue-200 mt-2"></div>
+                </div>
               ))}
               {filtered.length === 0 && (
                 <div className="text-center py-8">
@@ -401,16 +661,9 @@ export default function App() {
       {showTabSaveModal && capturedTab && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
           <div className="bg-white rounded-xl shadow-lg p-6 max-w-md w-full mx-4">
-            <div className="flex items-center gap-3 mb-4">
-              <div className="w-8 h-8 rounded-lg bg-green-100 flex items-center justify-center">
-                <svg className="w-5 h-5 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 7h.01M7 3h5c.512 0 1.024.195 1.414.586l7 7a2 2 0 010 2.828l-7 7a1.994 1.994 1 013 12V7a4 4 0 014-4z" />
-                </svg>
-              </div>
-              <div>
-                <div className="font-semibold text-gray-800 text-lg">Save Tab</div>
-                <div className="text-sm text-gray-500">Select a session to add this tab to</div>
-              </div>
+            <div className="mb-4">
+              <div className="font-semibold text-gray-800 text-lg">Save Tab</div>
+              <div className="text-sm text-gray-500">Select a session to add this tab to</div>
             </div>
             
             <div className="mb-4">
@@ -482,6 +735,111 @@ export default function App() {
                 className="flex-1 px-4 py-2 text-gray-600 border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
               >
                 Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Session Creation Modal */}
+      {showSessionNameModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-xl shadow-lg p-6 max-w-md w-full mx-4">
+            <div className="flex items-center gap-3 mb-4">
+              <div className="w-8 h-8 rounded-lg bg-blue-100 flex items-center justify-center">
+                <svg className="w-5 h-5 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
+                </svg>
+              </div>
+              <div>
+                <div className="font-semibold text-gray-800 text-lg">Create Session</div>
+                <div className="text-sm text-gray-500">
+                  Save current window tabs
+                </div>
+              </div>
+            </div>
+            
+            <div className="mb-4">
+              <div className="text-sm text-gray-600 mb-2">Session name:</div>
+              <input
+                type="text"
+                placeholder="Enter session name..."
+                className="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                value={sessionName}
+                onChange={(e) => setSessionName(e.target.value)}
+                onKeyPress={(e) => e.key === 'Enter' && handleCreateSession()}
+                autoFocus
+              />
+            </div>
+
+            {capturedTabs && (
+              <div className="mb-6">
+                <div className="text-sm text-gray-600 mb-2">
+                  Tabs to save ({capturedTabs.length}):
+                </div>
+                <div className="space-y-2 max-h-32 overflow-y-auto">
+                  {capturedTabs.map((tab, index) => (
+                    <div key={index} className="bg-gray-50 rounded-lg p-2">
+                      <div className="font-medium text-gray-800 text-xs truncate">{tab.title}</div>
+                      <div className="text-xs text-gray-400 truncate">{tab.url}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            <div className="flex gap-3">
+              <button
+                onClick={() => {
+                  setShowSessionNameModal(false)
+                  setSessionName('')
+                  setCapturedTabs(null)
+                }}
+                className="flex-1 px-4 py-2 text-gray-600 border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleCreateSession}
+                disabled={!sessionName.trim()}
+                className="flex-1 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                Create Session
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Delete Confirmation Modal */}
+      {showDeleteConfirmModal && sessionToDelete && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-xl shadow-lg p-6 max-w-md w-full mx-4">
+            <div className="mb-6">
+              <div className="font-semibold text-gray-800 text-lg mb-2">Delete Session</div>
+              <div className="text-sm text-gray-600">
+                Are you sure you want to delete "{sessionToDelete.name}"?
+              </div>
+              <div className="text-xs text-gray-500 mt-2">
+                This action cannot be undone.
+              </div>
+            </div>
+
+            <div className="flex gap-3">
+              <button
+                onClick={() => {
+                  setShowDeleteConfirmModal(false)
+                  setSessionToDelete(null)
+                }}
+                className="flex-1 px-4 py-2 text-gray-600 border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
+              >
+                Go Back
+              </button>
+              <button
+                onClick={confirmDeleteSession}
+                className="flex-1 px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors"
+              >
+                Delete Session
               </button>
             </div>
           </div>

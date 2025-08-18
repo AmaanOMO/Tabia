@@ -2,17 +2,18 @@ import type {
   SessionDTO, TabDTO, CreateSessionPayload, CreateTabPayload
 } from './types'
 import { logger } from './logger'
+import { supabase } from '../data/supabaseClient'
 
-// Use environment variable for API base URL, fallback to localStorage if not available
 const BASE = import.meta.env.VITE_API_BASE
+
+if (!BASE) {
+  throw new Error('VITE_API_BASE environment variable is required. Please configure your Supabase URL.')
+}
 
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
   try {
     logger.log('🌐 API request:', `${BASE}${path}`, init)
-    
-    // TODO: Implement proper Supabase auth
     const token = localStorage.getItem('supabase_token') ?? ''
-    
     const res = await fetch(`${BASE}${path}`, {
       ...init,
       headers: {
@@ -22,195 +23,106 @@ async function req<T>(path: string, init?: RequestInit): Promise<T> {
         ...(init?.headers || {})
       }
     })
-    
     logger.log('🌐 API response status:', res.status)
-    
     if (!res.ok) {
       const errorText = await res.text()
       logger.error('🌐 API error:', errorText)
       throw new Error(errorText)
     }
-    
     const data = await res.json()
     logger.log('🌐 API response data:', data)
     return data
-    
   } catch (error) {
     logger.error('🌐 API request failed:', error)
-    
-    // If it's a network error (Supabase not available), provide a helpful message
     if (error instanceof TypeError && error.message.includes('fetch')) {
-      throw new Error(`Supabase API not available. Please check your internet connection.`)
+      throw new Error(`Unable to connect to Supabase. Please check your internet connection and try again.`)
     }
-    
     throw error
   }
 }
 
-// Fallback to localStorage when API is not available
-function generateId(): string {
-  return Math.random().toString(36).substr(2, 9)
-}
-
-function getCurrentTimestamp(): string {
-  return new Date().toISOString()
-}
-
-const LocalStorageAPI = {
-  me: async (): Promise<{user: {email: string, photoUrl?: string}}> => {
-    return { user: { email: 'student@university.edu' } }
-  },
-
-  listSessions: async (): Promise<SessionDTO[]> => {
-    const sessions = localStorage.getItem('tabia_sessions')
-    return sessions ? JSON.parse(sessions) : []
-  },
-
-  createSession: async (payload: CreateSessionPayload): Promise<SessionDTO> => {
-    const session: SessionDTO = {
-      id: generateId(),
-      name: payload.name,
-      isStarred: false,
-      isWindowSession: payload.isWindowSession,
-      createdAt: getCurrentTimestamp(),
-      updatedAt: getCurrentTimestamp(),
-      tabs: payload.tabs.map(tab => ({
-        ...tab,
-        id: generateId(),
-        createdAt: getCurrentTimestamp()
-      }))
-    }
-    
-    const sessions = await LocalStorageAPI.listSessions()
-    sessions.unshift(session)
-    localStorage.setItem('tabia_sessions', JSON.stringify(sessions))
-    
-    return session
-  },
-
-  deleteSession: async (sessionId: string) => {
-    const sessions = await LocalStorageAPI.listSessions()
-    const filtered = sessions.filter(s => s.id !== sessionId)
-    localStorage.setItem('tabia_sessions', JSON.stringify(filtered))
-  },
-
-  starSession: async (sessionId: string, isStarred: boolean) => {
-    const sessions = await LocalStorageAPI.listSessions()
-    const session = sessions.find(s => s.id === sessionId)
-    if (session) {
-      session.isStarred = isStarred
-      session.updatedAt = getCurrentTimestamp()
-      localStorage.setItem('tabia_sessions', JSON.stringify(sessions))
-    }
-  },
-
-  addTab: async (sessionId: string, tab: CreateTabPayload): Promise<TabDTO> => {
-    const sessions = await LocalStorageAPI.listSessions()
-    const session = sessions.find(s => s.id === sessionId)
-    if (!session) throw new Error('Session not found')
-    
-    const newTab: TabDTO = {
-      ...tab,
-      id: generateId(),
-      title: tab.title || 'Untitled Tab', // Ensure title is always a string
-      createdAt: getCurrentTimestamp()
-    }
-    
-    if (!session.tabs) session.tabs = []
-    session.tabs.push(newTab)
-    session.updatedAt = getCurrentTimestamp()
-    
-    localStorage.setItem('tabia_sessions', JSON.stringify(sessions))
-    return newTab
-  },
-
-  deleteTab: async (tabId: string) => {
-    const sessions = await LocalStorageAPI.listSessions()
-    for (const session of sessions) {
-      if (session.tabs) {
-        const tabIndex = session.tabs.findIndex(t => t.id === tabId)
-        if (tabIndex !== -1) {
-          session.tabs.splice(tabIndex, 1)
-          session.updatedAt = getCurrentTimestamp()
-          localStorage.setItem('tabia_sessions', JSON.stringify(sessions))
-          break
-        }
-      }
-    }
-  },
-
-  reorderTabs: async (sessionId: string, orderedTabIds: string[]) => {
-    const sessions = await LocalStorageAPI.listSessions()
-    const session = sessions.find(s => s.id === sessionId)
-    if (!session || !session.tabs) return
-    
-    const reorderedTabs: TabDTO[] = []
-    for (const tabId of orderedTabIds) {
-      const tab = session.tabs.find(t => t.id === tabId)
-      if (tab) reorderedTabs.push(tab)
-    }
-    
-    session.tabs = reorderedTabs
-    session.updatedAt = getCurrentTimestamp()
-    localStorage.setItem('tabia_sessions', JSON.stringify(sessions))
-  },
-
-  restoreSession: async (sessionId: string) => {
-    const sessions = await LocalStorageAPI.listSessions()
-    const session = sessions.find(s => s.id === sessionId)
-    if (!session || !session.tabs) return
-    
-    // Extract URLs from session tabs
-    const urls = session.tabs.map(tab => tab.url)
-    
-    // Send message to background script to restore in current window
-    await chrome.runtime.sendMessage({
-      type: 'RESTORE_SESSION',
-      urls: urls
-    })
-  }
-}
-
+// Main API - Supabase only
 export const API = {
   me: async (): Promise<{user: {email: string, photoUrl?: string}}> => {
-    if (!BASE) {
-      logger.log('🔄 No API base URL, using localStorage for user data')
-      return LocalStorageAPI.me()
-    }
     try {
-      return await req('/me', 'GET' as any)
+      const result = await req('/user_profile?select=*', 'GET' as any) as any[]
+      if (result && result.length > 0) {
+        const user = result[0] as any
+        return { user: { email: user.email, photoUrl: user.photo_url } }
+      }
+      // If no user found, return default user for development
+      return { user: { email: 'developer@tabia.local', photoUrl: undefined } }
     } catch (error) {
-      logger.log('🔄 Falling back to localStorage for user data')
-      return LocalStorageAPI.me()
+      logger.error('❌ Failed to fetch user profile:', error)
+      throw new Error('Unable to load user profile. Please try again.')
     }
   },
 
   listSessions: async (): Promise<SessionDTO[]> => {
-    if (!BASE) {
-      logger.log('🔄 No API base URL, using localStorage for sessions')
-      return LocalStorageAPI.listSessions()
-    }
     try {
-      return await req('/sessions', 'GET' as any)
+      const sessions = await req('/sessions?select=*&order=updated_at.desc', 'GET' as any) as SessionDTO[]
+      return sessions || []
     } catch (error) {
-      logger.log('🔄 Falling back to localStorage for sessions')
-      return LocalStorageAPI.listSessions()
+      logger.error('❌ Failed to fetch sessions:', error)
+      throw new Error('Unable to load sessions. Please try again.')
     }
   },
 
   createSession: async (payload: CreateSessionPayload): Promise<SessionDTO> => {
-    if (!BASE) {
-      logger.log('🔄 No API base URL, using localStorage for session creation')
-      return LocalStorageAPI.createSession(payload)
-    }
     try {
-      return await req('/sessions', {
+      // Get the authenticated user
+      const { data: { user }, error: authError } = await supabase.auth.getUser()
+      if (authError || !user) {
+        logger.error('❌ Authentication error:', authError)
+        throw new Error('User not authenticated. Please sign in first.')
+      }
+
+      // First, create the session
+      const session = await req('/sessions', {
         method: 'POST',
-        body: JSON.stringify(payload)
-      })
+        body: JSON.stringify({
+          name: payload.name,
+          owner_id: user.id, // Use real user ID from Supabase Auth
+          is_window_session: payload.isWindowSession
+        })
+      }) as SessionDTO
+
+      // Then, create tabs for this session
+      if (payload.tabs && payload.tabs.length > 0) {
+        const tabsPromises = payload.tabs.map(tab => 
+          req<TabDTO>('/tabs', {
+            method: 'POST',
+            body: JSON.stringify({
+              session_id: session.id,
+              title: tab.title || '',
+              url: tab.url,
+              tab_index: tab.tabIndex,
+              window_index: tab.windowIndex
+            })
+          })
+        )
+        
+        const createdTabs = await Promise.all(tabsPromises)
+        session.tabs = createdTabs
+      }
+
+      return session
     } catch (error) {
-      logger.log('🔄 Falling back to localStorage for session creation')
-      return LocalStorageAPI.createSession(payload)
+      logger.error('❌ Failed to create session:', error)
+      throw new Error('Unable to save session. Please try again.')
+    }
+  },
+
+  updateSession: async (sessionId: string, updates: Partial<SessionDTO>): Promise<SessionDTO> => {
+    try {
+      const session = await req(`/sessions/${sessionId}`, {
+        method: 'PATCH',
+        body: JSON.stringify(updates)
+      }) as SessionDTO
+      return session
+    } catch (error) {
+      logger.error('❌ Failed to update session:', error)
+      throw new Error('Unable to update session. Please try again.')
     }
   },
 
@@ -218,63 +130,53 @@ export const API = {
     try {
       await req(`/sessions/${sessionId}`, { method: 'DELETE' })
     } catch (error) {
-      logger.log('🔄 Falling back to localStorage for session deletion')
-      return LocalStorageAPI.deleteSession(sessionId)
-    }
-  },
-
-  starSession: async (sessionId: string, starred: boolean): Promise<void> => {
-    try {
-      await req(`/sessions/${sessionId}/star`, {
-        method: 'PATCH',
-        body: JSON.stringify({ starred })
-      })
-    } catch (error) {
-      logger.log('🔄 Falling back to localStorage for session starring')
-      return LocalStorageAPI.starSession(sessionId, starred)
+      logger.error('❌ Failed to delete session:', error)
+      throw new Error('Unable to delete session. Please try again.')
     }
   },
 
   addTab: async (sessionId: string, payload: CreateTabPayload): Promise<TabDTO> => {
     try {
-      return await req(`/sessions/${sessionId}/tabs`, {
+      const tab = await req('/tabs', {
         method: 'POST',
-        body: JSON.stringify(payload)
-      })
+        body: JSON.stringify({
+          session_id: sessionId,
+          title: payload.title || '',
+          url: payload.url,
+          tab_index: payload.tabIndex,
+          window_index: payload.windowIndex
+        })
+      }) as TabDTO
+      return tab
     } catch (error) {
-      logger.log('🔄 Falling back to localStorage for tab addition')
-      return LocalStorageAPI.addTab(sessionId, payload)
+      logger.error('❌ Failed to add tab:', error)
+      throw new Error('Unable to add tab. Please try again.')
     }
   },
 
   deleteTab: async (sessionId: string, tabId: string): Promise<void> => {
     try {
-      await req(`/sessions/${sessionId}/tabs/${tabId}`, { method: 'DELETE' })
+      await req(`/tabs/${tabId}`, { method: 'DELETE' })
     } catch (error) {
-      logger.log('🔄 Falling back to localStorage for tab deletion')
-      return LocalStorageAPI.deleteTab(tabId)
-    }
-  },
-
-  reorderTabs: async (sessionId: string, tabIds: string[]): Promise<void> => {
-    try {
-      await req(`/sessions/${sessionId}/tabs/reorder`, {
-        method: 'PATCH',
-        body: JSON.stringify({ tabIds })
-      })
-    } catch (error) {
-      logger.log('🔄 Falling back to localStorage for tab reordering')
-      return LocalStorageAPI.reorderTabs(sessionId, tabIds)
+      logger.error('❌ Failed to delete tab:', error)
+      throw new Error('Unable to delete tab. Please try again.')
     }
   },
 
   restoreSession: async (sessionId: string): Promise<void> => {
     try {
-      const session = await req(`/sessions/${sessionId}`, 'GET' as any)
-      await req(`/sessions/${sessionId}/restore`, { method: 'POST' })
+      const session = await req(`/sessions/${sessionId}`, 'GET' as any) as SessionDTO
+      if (!session || !session.tabs) {
+        throw new Error('Session not found or has no tabs')
+      }
+      const urls = session.tabs.map((tab: TabDTO) => tab.url)
+      await chrome.runtime.sendMessage({
+        type: 'RESTORE_SESSION',
+        urls: urls
+      })
     } catch (error) {
-      logger.log('🔄 Falling back to localStorage for session restoration')
-      return LocalStorageAPI.restoreSession(sessionId)
+      logger.error('❌ Failed to restore session:', error)
+      throw new Error('Unable to restore session. Please try again.')
     }
   }
 }

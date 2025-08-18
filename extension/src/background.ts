@@ -1,118 +1,177 @@
-// Inline logger to avoid import issues in service worker
-const logger = {
-  log: (...args: any[]) => {
-    if (typeof window !== 'undefined' && window.console && typeof window.console.log === 'function') {
-      window.console.log(...args)
-    }
-  },
-  error: (...args: any[]) => {
-    if (typeof window !== 'undefined' && window.console && typeof window.console.error === 'function') {
-      window.console.error(...args)
-    }
-  }
-}
+// src/background.ts - Service Worker with OAuth
+import { supabase } from './bg/supabaseClient.js';
 
-logger.log('🚀 Background script loaded successfully')
+console.log('[bg] loaded');
 
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
-  logger.log('📨 Message received in background script:', msg)
+  console.log('[bg] Received message:', msg.type);
+  
+  if (msg?.type === 'START_GOOGLE_OAUTH') {
+    console.log('[bg] Starting Google OAuth flow...');
+    
+    (async () => {
+      try {
+        const redirectTo = chrome.identity.getRedirectURL('provider_cb');
+        console.log('[bg] Redirect URL:', redirectTo);
 
-  ;(async () => {
-    try {
-      if (msg.type === 'CAPTURE_CURRENT_WINDOW') {
-        logger.log('📱 Capturing current window...')
-        const active = await chrome.windows.getCurrent({ populate: true })
-        logger.log('📱 Current window:', active)
-        const tabs = (active.tabs ?? []).map((t, idx) => ({
-          title: t.title ?? '',
-          url: t.url ?? '',
-          tabIndex: idx,
-          windowIndex: 0
-        }))
-        logger.log('📱 Captured tabs:', tabs)
-        sendResponse({ tabs, scope: 'WINDOW' })
-      }
-
-      if (msg.type === 'CAPTURE_ALL_WINDOWS') {
-        logger.log('📱 Capturing all windows...')
-        const wins = await chrome.windows.getAll({ populate: true, windowTypes: ['normal'] })
-        logger.log('📱 All windows:', wins)
-        const tabs = wins.flatMap((w, wIdx) =>
-          (w.tabs ?? []).map((t, idx) => ({
-            title: t.title ?? '',
-            url: t.url ?? '',
-            tabIndex: idx,
-            windowIndex: wIdx
-          }))
-        )
-        logger.log('📱 Captured tabs:', tabs)
-        sendResponse({ tabs, scope: 'ALL_WINDOWS' })
-      }
-
-      if (msg.type === 'RESTORE_MULTI_WINDOW') {
-        logger.log('🔄 Restoring multi-window session...')
-        for (const group of msg.windows as string[][]) {
-          await chrome.windows.create({ url: group })
-        }
-        sendResponse({ ok: true })
-      }
-
-      if (msg.type === 'RESTORE_SESSION_IN_CURRENT_WINDOW') {
-        logger.log('🔄 Restoring session in current window...')
-        const currentWindow = await chrome.windows.getCurrent({ populate: true })
+        const { data, error } = await supabase.auth.signInWithOAuth({
+          provider: 'google',
+          options: {
+            redirectTo,
+            skipBrowserRedirect: true,
+            queryParams: { prompt: 'consent' },
+          },
+        });
+        if (error || !data?.url) throw new Error(error?.message || 'No URL');
         
-        // Close all existing tabs in current window
-        if (currentWindow.tabs) {
-          for (const tab of currentWindow.tabs) {
-            if (tab.id) {
-              await chrome.tabs.remove(tab.id)
-            }
-          }
-        }
-        
-        // Create new tabs with session URLs
-        const urls = msg.urls as string[]
-        if (urls.length > 0) {
-          await chrome.tabs.create({ url: urls[0], active: true })
-          for (let i = 1; i < urls.length; i++) {
-            await chrome.tabs.create({ url: urls[i], active: false })
-          }
-        }
-        
-        sendResponse({ ok: true })
-      }
+        console.log('[bg] OAuth URL received, launching WebAuthFlow...');
 
-      if (msg.type === 'RESTORE_SESSION') {
-        logger.log('🔄 Restoring session...')
-        const urls = msg.urls as string[]
-        
-        if (urls && urls.length > 0) {
-          // Get current window
-          const currentWindow = await chrome.windows.getCurrent({ populate: true })
-          
-          // Close all existing tabs in current window
-          if (currentWindow.tabs) {
-            for (const tab of currentWindow.tabs) {
-              if (tab.id) {
-                await chrome.tabs.remove(tab.id)
+        const cbUrl: string = await new Promise((resolve, reject) => {
+          chrome.identity.launchWebAuthFlow(
+            { url: data.url!, interactive: true },
+            (returned) => {
+              console.log('[bg] WebAuthFlow callback received:', returned);
+              if (chrome.runtime.lastError || !returned) {
+                console.error('[bg] WebAuthFlow error:', chrome.runtime.lastError);
+                return reject(chrome.runtime.lastError ?? new Error('No redirect'));
               }
+              resolve(returned);
             }
-          }
-          
-          // Create new tabs with session URLs
-          await chrome.tabs.create({ url: urls[0], active: true })
-          for (let i = 1; i < urls.length; i++) {
-            await chrome.tabs.create({ url: urls[i], active: false })
-          }
+          );
+        });
+
+        console.log('[bg] Processing OAuth callback...');
+        const u = new URL(cbUrl);
+        const code = u.searchParams.get('code');
+        
+        if (code) {
+          console.log('[bg] PKCE code found, exchanging for session...');
+          const { error: exErr } = await supabase.auth.exchangeCodeForSession(code);
+          if (exErr) throw new Error(exErr.message);
+        } else {
+          console.log('[bg] Implicit tokens found, setting session...');
+          const h = new URLSearchParams(u.hash.slice(1));
+          const at = h.get('access_token');
+          const rt = h.get('refresh_token');
+          if (!at || !rt) throw new Error('No code or tokens in redirect');
+          const { error: setErr } = await supabase.auth.setSession({ access_token: at, refresh_token: rt });
+          if (setErr) throw new Error(setErr.message);
+        }
+
+        console.log('[bg] OAuth completed successfully, sending AUTH_STATE_CHANGED...');
+        // Session persisted via chromeStorageAdapter
+        chrome.runtime.sendMessage({ type: 'AUTH_STATE_CHANGED' });
+        sendResponse({ ok: true });
+        console.log('[bg] OAuth flow completed successfully');
+      } catch (e: any) {
+        console.error('[bg] OAuth error:', e);
+        sendResponse({ ok: false, error: String(e?.message || e) });
+      }
+    })();
+
+    return true; // keep channel open
+  }
+
+  if (msg?.type === 'CAPTURE_CURRENT_WINDOW') {
+    console.log('[bg] Capturing current window tabs...');
+    
+    (async () => {
+      try {
+        const currentWindow = await chrome.windows.getCurrent();
+        const tabs = await chrome.tabs.query({ windowId: currentWindow.id });
+        
+        const tabData = tabs.map(tab => ({
+          url: tab.url,
+          title: tab.title,
+          favIconUrl: tab.favIconUrl,
+          tabIndex: tab.index
+        }));
+        
+        console.log('[bg] Captured tabs:', tabData);
+        sendResponse({ success: true, tabs: tabData });
+      } catch (error) {
+        console.error('[bg] Error capturing tabs:', error);
+        sendResponse({ success: false, error: String(error) });
+      }
+    })();
+    
+    return true; // keep channel open
+  }
+
+  if (msg?.type === 'CAPTURE_ALL_WINDOWS') {
+    console.log('[bg] Capturing all windows tabs...');
+    
+    (async () => {
+      try {
+        const windows = await chrome.windows.getAll();
+        const allTabs = [];
+        
+        for (const window of windows) {
+          const tabs = await chrome.tabs.query({ windowId: window.id });
+          allTabs.push(...tabs.map(tab => ({
+            url: tab.url,
+            title: tab.title,
+            favIconUrl: tab.favIconUrl,
+            tabIndex: tab.index
+          })));
         }
         
-        sendResponse({ ok: true })
+        console.log('[bg] Captured all tabs:', allTabs);
+        sendResponse({ success: true, tabs: allTabs });
+      } catch (error) {
+        console.error('[bg] Error capturing all tabs:', error);
+        sendResponse({ success: false, error: String(error) });
       }
-    } catch (error) {
-      logger.error('❌ Background script error:', error)
-      sendResponse({ error: error instanceof Error ? error.message : String(error) })
-    }
-  })()
+    })();
+    
+    return true; // keep channel open
+  }
 
-  return true
-})
+  if (msg?.type === 'RESTORE_SESSION') {
+    console.log('[bg] Restoring session...');
+    
+    (async () => {
+      try {
+        const currentWindow = await chrome.windows.getCurrent();
+        
+        // Close existing tabs in current window
+        const existingTabs = await chrome.tabs.query({ windowId: currentWindow.id });
+        for (const tab of existingTabs) {
+          if (tab.id) {
+            await chrome.tabs.remove(tab.id);
+          }
+        }
+
+        // Open new tabs
+        for (const tab of msg.tabs) {
+          await chrome.tabs.create({ 
+            url: tab.url, 
+            windowId: currentWindow.id,
+            active: false 
+          });
+        }
+
+        // Make first tab active
+        if (msg.tabs.length > 0) {
+          const newTabs = await chrome.tabs.query({ windowId: currentWindow.id });
+          if (newTabs[0]?.id) {
+            await chrome.tabs.update(newTabs[0].id, { active: true });
+          }
+        }
+
+        sendResponse({ success: true });
+      } catch (error) {
+        console.error('[bg] Error restoring session:', error);
+        sendResponse({ success: false, error: String(error) });
+      }
+    })();
+    
+    return true; // keep channel open
+  }
+
+  if (msg?.type === 'PING') {
+    console.log('[bg] PING received, responding...');
+    sendResponse({ ok: true });
+    return true;
+  }
+});

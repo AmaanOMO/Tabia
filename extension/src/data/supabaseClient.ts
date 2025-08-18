@@ -1,4 +1,5 @@
 import { createClient } from '@supabase/supabase-js';
+import { chromeStorageAdapter } from './supaStorage';
 import {
   SessionDTO,
   TabDTO,
@@ -19,8 +20,12 @@ export const supabase = createClient(
   import.meta.env.VITE_SUPABASE_ANON_KEY!,
   {
     auth: {
+      flowType: 'pkce',
+      autoRefreshToken: true,
       persistSession: true,
-      autoRefreshToken: true
+      detectSessionInUrl: false,         // we handle redirects ourselves
+      storage: chromeStorageAdapter,
+      storageKey: 'tabia.supabase.auth', // IMPORTANT: same in bg + popup
     }
   }
 );
@@ -67,8 +72,8 @@ export async function listSessions(options: ListOptions = {}): Promise<SessionDT
     id: session.id,
     name: session.name,
     ownerId: session.owner_id,
-    ownerName: session.users?.name,
-    ownerEmail: session.users?.email,
+    ownerName: session.users?.[0]?.name,
+    ownerEmail: session.users?.[0]?.email,
     isStarred: session.is_starred,
     isWindowSession: session.is_window_session,
     isOwner: session.owner_id === user.id,
@@ -122,8 +127,8 @@ export async function getSession(sessionId: string): Promise<SessionDTO> {
     id: data.id,
     name: data.name,
     ownerId: data.owner_id,
-    ownerName: data.users?.name,
-    ownerEmail: data.users?.email,
+    ownerName: data.users?.[0]?.name,
+    ownerEmail: data.users?.[0]?.email,
     isStarred: data.is_starred,
     isWindowSession: data.is_window_session,
     isOwner: data.owner_id === user.id,
@@ -191,10 +196,21 @@ export async function createSession(request: CreateSessionRequest): Promise<Sess
     })) || [];
   }
 
+  // Get owner details
+  const { data: ownerData, error: ownerError } = await supabase
+    .from('users')
+    .select('name, email')
+    .eq('id', session.owner_id)
+    .single();
+
+  if (ownerError) throw new Error(`Failed to get owner details: ${ownerError.message}`);
+
   return {
     id: session.id,
     name: session.name,
     ownerId: session.owner_id,
+    ownerName: ownerData.name,
+    ownerEmail: ownerData.email,
     isStarred: session.is_starred,
     isWindowSession: session.is_window_session,
     isOwner: true,
@@ -340,8 +356,8 @@ export async function listCollaborators(sessionId: string): Promise<Collaborator
     id: collab.id,
     sessionId: collab.session_id,
     userId: collab.user_id,
-    userName: collab.users?.name,
-    userEmail: collab.users?.email,
+    userName: collab.users?.[0]?.name,
+    userEmail: collab.users?.[0]?.email,
     role: collab.role as CollaboratorRole,
     addedAt: collab.added_at
   })) || [];
