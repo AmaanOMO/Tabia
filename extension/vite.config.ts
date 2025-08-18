@@ -62,13 +62,14 @@ export default defineConfig({
     outDir: 'dist',
     rollupOptions: {
       input: {
-        main: resolve(__dirname, 'index.html'),
-        background: resolve(__dirname, 'src/background.ts')
+        popup: resolve(__dirname, 'index.html'),
+        background: resolve(__dirname, 'src/background.ts'),
       },
       output: {
-        entryFileNames: '[name].js',
-        chunkFileNames: '[name].js',
-        assetFileNames: '[name].[ext]'
+        entryFileNames: (chunk) =>
+          chunk.name === 'background' ? 'background.js' : 'assets/[name].js',
+        chunkFileNames: 'assets/[name].js',
+        assetFileNames: 'assets/[name].[ext]'
       }
     }
   }

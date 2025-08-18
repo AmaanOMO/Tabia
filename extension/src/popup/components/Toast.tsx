@@ -6,7 +6,7 @@ export function Toast({ text, actionLabel, onAction }: {
   onAction?: () => void
 }) {
   return (
-    <div className="fixed bottom-3 left-3 right-3 mx-3 bg-white rounded-xl shadow-lg border border-gray-200 p-3 flex items-center justify-between animate-in slide-in-from-bottom-2 duration-300">
+    <div className="fixed top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 bg-white rounded-xl shadow-lg border border-blue-200 p-3 flex items-center justify-between animate-in fade-in-up duration-300">
       <span className="text-sm text-gray-700 font-medium">{text}</span>
       {actionLabel && (
         <button

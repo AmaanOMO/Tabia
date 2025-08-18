@@ -1,88 +1,121 @@
-# Tabia v2 - Supabase Backend
+# Tabia v2 Supabase Backend
 
-This folder contains the SQL schema and configuration for Tabia's v2 implementation using Supabase.
+This directory contains the Supabase (v2) backend implementation for Tabia, providing a modern, scalable alternative to the Spring Boot backend.
 
-## 🚀 Quick Setup
+## 🚀 Quick Start
 
-### 1. Create Supabase Project
+### 1. Set up Supabase Project
 1. Go to [supabase.com](https://supabase.com) and create a new project
-2. Wait for the project to be ready (~2 minutes)
+2. Note your project URL and anon key
 
 ### 2. Apply Database Schema
-1. Go to your Supabase project dashboard
-2. Navigate to **SQL Editor**
-3. Copy and paste the contents of `sql/schema.sql`
-4. Click **Run** to create tables and indexes
-5. Copy and paste the contents of `sql/rls.sql`  
-6. Click **Run** to enable Row Level Security
+Run the SQL files in this order:
 
-### 3. Enable Google Authentication
-1. Go to **Authentication** → **Providers**
-2. Enable **Google** provider
-3. Add your Google OAuth credentials:
-   - **Client ID**: Get from Google Cloud Console
-   - **Client Secret**: Get from Google Cloud Console
-4. Add your domain to **Site URL** and **Redirect URLs**
+```sql
+-- 1. Create tables and basic structure
+\i sql/schema.sql
 
-### 4. Get API Keys
-1. Go to **Settings** → **API**
-2. Copy the **Project URL** and **anon public** key
-3. Add them to your extension's `.env` file:
-   ```env
-   VITE_SUPABASE_URL=https://your-project.supabase.co
-   VITE_SUPABASE_ANON_KEY=eyJhbGciOi...
-   ```
+-- 2. Apply Row Level Security policies
+\i sql/rls.sql
 
-### 5. Enable Realtime (Optional)
-1. Go to **Database** → **Replication**
-2. Enable realtime for tables: `sessions`, `tabs`, `collaborators`
-3. This enables live updates across browser windows
+-- 3. Create custom endpoints and functions
+\i sql/endpoints.sql
+```
+
+### 3. Configure Google OAuth
+1. In Supabase Dashboard → Authentication → Providers
+2. Enable Google provider
+3. Add your Google OAuth client ID and secret
+4. Set authorized redirect URI: `https://[YOUR_PROJECT_REF].supabase.co/auth/v1/callback`
+
+### 4. Update Extension Environment
+Add these to your `.env` file:
+```env
+VITE_SUPABASE_URL=https://[YOUR_PROJECT_REF].supabase.co
+VITE_SUPABASE_ANON_KEY=[YOUR_ANON_KEY]
+VITE_API_BASE=https://[YOUR_PROJECT_REF].supabase.co/rest/v1
+```
+
+## 🔧 Recent Fixes Applied
+
+### Fixed RLS Infinite Recursion
+- **Issue**: RLS policies had circular references causing infinite recursion
+- **Solution**: Added explicit table aliases in all policy queries
+- **Files**: `sql/rls.sql`
+
+### Added Missing Endpoints
+- **Issue**: `/me` endpoint didn't exist, causing 404 errors
+- **Solution**: Created `user_profile` view and `get_user_profile()` function
+- **Files**: `sql/endpoints.sql`
+
+### Improved Session Restoration
+- **Issue**: Session restoration wasn't working properly
+- **Solution**: Created `get_session_tabs()` function for secure tab retrieval
+- **Files**: `sql/endpoints.sql`
 
 ## 📊 Database Schema
 
 ### Core Tables
-- **`users`** - User profiles synced from Supabase Auth
-- **`sessions`** - Tab groups/collections  
-- **`tabs`** - Individual browser tabs within sessions
-- **`collaborators`** - Users with access to shared sessions
-- **`invites`** - Invitation codes for session sharing
+- **users**: User profiles (synced from Supabase Auth)
+- **sessions**: Tab groups with metadata
+- **tabs**: Individual browser tabs within sessions
+- **collaborators**: Session sharing and permissions
+- **invites**: Session invitation system
 
-### Relationships
-- Users own sessions (1:many)
-- Sessions contain tabs (1:many)  
-- Sessions have collaborators (many:many through collaborators table)
-- Sessions can have invite codes (1:many)
+### Security Features
+- **Row Level Security (RLS)**: All tables protected
+- **User Isolation**: Users can only access their own data
+- **Collaboration**: Secure sharing between users
+- **Role-based Access**: Owner, Editor, Viewer permissions
 
-## 🔐 Security Model
+## 🔐 Authentication
 
-### Row Level Security (RLS)
-All tables have RLS enabled with policies that enforce:
+- **Google OAuth**: Primary authentication method
+- **JWT Tokens**: Automatic token management
+- **User Profiles**: Automatic profile creation on first login
 
-- **Users**: Can only read/write their own profile
-- **Sessions**: Visible to owner + collaborators; only owner can modify
-- **Tabs**: Visible to session collaborators; owner + editors can modify
-- **Collaborators**: Owner manages; users see their own access
-- **Invites**: Owner creates; temporary policy allows authenticated users to read for acceptance
+## 🚨 Troubleshooting
 
-### Roles
-- **OWNER**: Full control (session creator)
-- **EDITOR**: Can add/remove/modify tabs
-- **VIEWER**: Read-only access
+### Common Issues
 
-## 🧪 Testing Setup
+#### 1. RLS Policy Errors
+```sql
+-- If you see "infinite recursion" errors:
+-- Make sure you've applied the updated rls.sql file
+-- Check that all policy queries use explicit table aliases
+```
 
-See `../docs/TESTING.md` for detailed testing instructions including:
-- Two-account RLS verification
-- Realtime sync testing
-- Collaboration flow testing
+#### 2. Missing Endpoints
+```sql
+-- If you see 404 errors for /me:
+-- Make sure you've applied endpoints.sql
+-- Verify the user_profile view exists
+```
+
+#### 3. Session Restoration Not Working
+```sql
+-- If sessions don't open tabs:
+-- Check that get_session_tabs function exists
+-- Verify RLS policies allow access to session data
+```
+
+### Debug Queries
+```sql
+-- Check if user_profile view exists
+SELECT * FROM user_profile LIMIT 1;
+
+-- Check if get_session_tabs function exists
+SELECT routine_name FROM information_schema.routines 
+WHERE routine_name = 'get_session_tabs';
+
+-- Test RLS policies
+SELECT * FROM sessions WHERE owner_id = auth_uid();
+```
 
 ## 🔄 Migration from v1
 
-See `../docs/MIGRATION_NOTES.md` for mapping between Spring Boot v1 endpoints and Supabase v2 operations.
+See `docs/MIGRATION_NOTES.md` for detailed migration information.
 
-## 📝 Notes
+## 📝 Testing
 
-- The invite acceptance flow currently uses client-side logic with a temporary RLS policy
-- For production, consider implementing an Edge Function for invite acceptance
-- All timestamps use `timestamptz` for proper timezone handling
-- Indexes are optimized for common query patterns
+See `docs/TESTING.md` for testing procedures and verification steps.
