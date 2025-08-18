@@ -1,4 +1,4 @@
-# Tabia - Smart Tab Session Manager + AI Assistant
+# Tabia - Smart Tab Session Manager
 
 🧠 **Project Overview**
 
