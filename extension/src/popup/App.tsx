@@ -18,50 +18,74 @@ export default function App() {
   const [query, setQuery] = useState('')
   const [toast, setToast] = useState<null | {text: string, undo?: () => void}>(null)
   const [showHelp, setShowHelp] = useState(false)
-  const [loading, setLoading] = useState(true)
+  const [booting, setBooting] = useState(true)   // replaces "loading" for initial auth check
+  const [dataLoading, setDataLoading] = useState(false) // optional tiny spinner inside list
   const [error, setError] = useState<string | null>(null)
   const [showSignin, setShowSignin] = useState(false)
 
   useEffect(() => {
-    let unsub = supabase.auth.onAuthStateChange(async (_evt, session) => {
-      if (session) {
-        // Persist token for REST API
-        try { localStorage.setItem('supabase_token', session.access_token); } catch {}
-        setShowSignin(false);
-        setError(null);
-        await afterLoginLoad(); // your me(), listSessions(), etc.
-      } else {
-        try { localStorage.removeItem('supabase_token'); } catch {}
-        // <-- important when user signed out or first open
-        setShowSignin(true);
-        setLoading(false);
-      }
-    }).data.subscription;
+    let alive = true;
 
     (async () => {
-      // On open, see if we already have a session
-      const { data: { session } } = await supabase.auth.getSession();
-      if (session) {
-        try { localStorage.setItem('supabase_token', session.access_token); } catch {}
+      try {
+        const { data: { session } } = await supabase.auth.getSession();
+
+        if (!alive) return;
+
+        if (!session) {
+          setShowSignin(true);
+          setBooting(false);      // show the Sign-in screen, not the full spinner
+          return;
+        }
+
+        // We are authenticated — show the app immediately.
         setShowSignin(false);
-        await afterLoginLoad(); // will flip loading -> false in finally
-      } else {
-        try { localStorage.removeItem('supabase_token'); } catch {}
+        setBooting(false);
+
+        // Load data in background; do NOT flip booting back to true.
+        void loadInitialData();
+      } catch (e) {
+        if (!alive) return;
+        console.error('Initial boot failed:', e);
         setShowSignin(true);
-        setLoading(false);      // <-- important
+        setBooting(false);
       }
     })();
 
-    return () => unsub?.unsubscribe();
+    return () => { alive = false; };
   }, []);
 
-  async function afterLoginLoad() {
+  async function loadInitialData() {
+    let alive = true;
+    setDataLoading(true);
+
     try {
-      setLoading(true);
-      // await upsertSelfUser();            // REMOVED - was background code
-      const userData = await API.me();
-      setUser(userData.user);
+      // background ping is fine but ignore failures
+      try {
+        await new Promise((resolve) => {
+          chrome.runtime.sendMessage({ type: 'PING' }, () => resolve(null));
+        });
+      } catch {}
+
+      // upsert user profile (ignore non-fatal errors)
+      const { data: { user } } = await supabase.auth.getUser();
+      if (user) {
+        try {
+          await supabase.from('users').upsert({
+            uid: user.id,
+            email: user.email,
+            name: user.user_metadata?.full_name || user.email,
+            photo_url: user.user_metadata?.avatar_url
+          }, { onConflict: 'uid' });
+        } catch {}
+      }
+
+      const userData = await API.me();           // uses supabase token internally now
       const sessionsData = await API.listSessions();
+
+      if (!alive) return;
+
+      setUser(userData.user);
       setSessions(sessionsData.map(s => ({ ...s, scope: s.isWindowSession ? 'WINDOW' : 'ALL_WINDOWS' })));
       
       // Auto-scroll to newest session
@@ -73,22 +97,22 @@ export default function App() {
           }
         }, 100);
       }
-    } catch (error) {
-      console.error('Failed to load data after login:', error);
-      setError(error instanceof Error ? error.message : String(error));
+    } catch (err) {
+      console.error('loadInitialData error:', err);
+      // Don't flip to Sign-in; keep the UI and optionally show a toast
+      setToast({ text: 'Could not refresh sessions right now.' });
+      setTimeout(() => setToast(null), 3000);
     } finally {
-      setLoading(false);
+      if (alive) setDataLoading(false);
     }
+
+    return () => { alive = false; };
   }
 
   // Listen for auth state changes and persist session
   useEffect(() => {
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
       chrome.storage.local.set({ session: session || null });
-      try {
-        if (session) localStorage.setItem('supabase_token', session.access_token);
-        else localStorage.removeItem('supabase_token');
-      } catch {}
     });
 
     return () => subscription.unsubscribe();
@@ -118,15 +142,24 @@ export default function App() {
         type: scope === 'WINDOW' ? 'CAPTURE_CURRENT_WINDOW' : 'CAPTURE_ALL_WINDOWS'
       })
 
-      const resp = await chrome.runtime.sendMessage({
-        type: scope === 'WINDOW' ? 'CAPTURE_CURRENT_WINDOW' : 'CAPTURE_ALL_WINDOWS'
-      })
+      const resp = await new Promise<any>((resolve) => {
+        try {
+          chrome.runtime.sendMessage({
+            type: scope === 'WINDOW' ? 'CAPTURE_CURRENT_WINDOW' : 'CAPTURE_ALL_WINDOWS'
+          }, (r) => {
+            const err = chrome.runtime.lastError;
+            if (err) resolve({ success: false, error: err.message });
+            else resolve(r);
+          });
+        } catch (e: any) {
+          resolve({ success: false, error: String(e?.message || e) });
+        }
+      });
 
       logger.log('📡 Response from background script:', resp)
-      logger.log('📡 Chrome runtime error:', chrome.runtime.lastError)
 
-      if (chrome.runtime.lastError) {
-        setToast({ text: chrome.runtime.lastError.message || 'Failed to capture tabs' })
+      if (!resp?.success) {
+        setToast({ text: resp?.error || 'Failed to capture tabs' })
         setTimeout(() => setToast(null), 3000)
         return null
       }
@@ -221,7 +254,7 @@ export default function App() {
   const [sessionToDelete, setSessionToDelete] = useState<SessionVM | null>(null)
 
   const handleSignInClick = async () => {
-    setLoading(true);
+    setDataLoading(true);
     setError(null);
     setToast({ text: 'Starting Google sign-in...' });
     
@@ -238,7 +271,7 @@ export default function App() {
         }
       });
 
-      setLoading(false);
+      setDataLoading(false);
       if (!resp?.ok) {
         setError(resp?.error || 'Authentication failed.');
         setToast(null);
@@ -248,12 +281,12 @@ export default function App() {
       const { data: { session } } = await supabase.auth.getSession();
       if (session) {
         setToast({ text: 'Signed in! Loading your sessions...' });
-        await afterLoginLoad();
+        void loadInitialData();
         setShowSignin(false);
         setTimeout(() => setToast(null), 2000);
       }
     } catch (error) {
-      setLoading(false);
+      setDataLoading(false);
       setError('Failed to start authentication. Please try again.');
       setToast(null);
       console.error('Sign-in error:', error);
@@ -443,8 +476,8 @@ export default function App() {
     logger.log('📋 Sessions reordered locally:', orderedIds)
   }
 
-  // Show loading state
-  if (loading) {
+  // Show booting state
+  if (booting) {
     return (
       <div className="w-[420px] h-[570px] bg-gradient-to-br from-gray-50 to-white flex items-center justify-center">
         <div className="text-center">
