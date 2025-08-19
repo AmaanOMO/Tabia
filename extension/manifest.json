@@ -1,6 +1,6 @@
 {
   "manifest_version": 3,
-  "name": "Tabia — Smart Tab Session Manager With Collaboration",
+  "name": "Tabia: Collaborate, Save & Organize Tabs",
   "description": "Save, restore, and collaborate on browser sessions in real-time",
   "version": "0.1.0",
   "action": {
