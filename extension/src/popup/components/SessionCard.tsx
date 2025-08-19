@@ -2,6 +2,7 @@ import React, { useState } from 'react'
 import { SessionDTO, Scope } from '../../common/types'
 import ScopeBadge from './ScopeBadge'
 import TabList from './TabList'
+import { SharePopup } from './SharePopup'
 
 export default function SessionCard({
   s, onOpen, onToggleStar, onDelete, onDeleteTab, onReorderSessions, user
@@ -16,30 +17,34 @@ export default function SessionCard({
 }) {
   const [expanded, setExpanded] = useState(false)
   const [isDragging, setIsDragging] = useState(false)
+  const [showSharePopup, setShowSharePopup] = useState(false)
   return (
     <div 
       className={`group bg-white rounded-md p-2.5 hover:shadow-sm transition-all duration-200 ${
         isDragging ? 'opacity-50 scale-95' : ''
       }`}
-      draggable={!!onReorderSessions}
-      onDragStart={(e) => {
-        if (onReorderSessions) {
-          setIsDragging(true)
-          e.dataTransfer.setData('text/plain', s.id)
-        }
-      }}
-      onDragEnd={() => setIsDragging(false)}
-      onDragOver={(e) => e.preventDefault()}
-      onDrop={(e) => {
-        e.preventDefault()
-        if (onReorderSessions) {
-          const draggedId = e.dataTransfer.getData('text/plain')
-          // TODO: Implement proper reordering logic
-          // For now, just move the dragged session to the top
-          onReorderSessions([s.id, draggedId])
-        }
-      }}
     >
+      {/* Draggable session header only */}
+      <div 
+        draggable={!!onReorderSessions}
+        onDragStart={(e) => {
+          if (onReorderSessions) {
+            setIsDragging(true)
+            e.dataTransfer.setData('text/plain', s.id)
+          }
+        }}
+        onDragEnd={() => setIsDragging(false)}
+        onDragOver={(e) => e.preventDefault()}
+        onDrop={(e) => {
+          e.preventDefault()
+          if (onReorderSessions) {
+            const draggedId = e.dataTransfer.getData('text/plain')
+            // TODO: Implement proper reordering logic
+            // For now, just move the dragged session to the top
+            onReorderSessions([s.id, draggedId])
+          }
+        }}
+      >
       <div className="flex items-center gap-3">
         {/* Session Icon - Simple black dot */}
         <div className="w-2 h-2 bg-black rounded-full"></div>
@@ -68,20 +73,7 @@ export default function SessionCard({
           <button
             title="Share session"
             onClick={() => {
-              const shareUrl = `${window.location.origin}/share/${s.id}`
-              navigator.clipboard.writeText(shareUrl).then(() => {
-                // Show toast or notification
-                alert('Session link copied to clipboard!')
-              }).catch(() => {
-                // Fallback for older browsers
-                const textArea = document.createElement('textarea')
-                textArea.value = shareUrl
-                document.body.appendChild(textArea)
-                textArea.select()
-                document.execCommand('copy')
-                document.body.removeChild(textArea)
-                alert('Session link copied to clipboard!')
-              })
+              setShowSharePopup(true)
             }}
             className="w-5 h-5 rounded bg-blue-50 text-blue-500 hover:bg-blue-100 transition-colors flex items-center justify-center"
           >
@@ -111,6 +103,7 @@ export default function SessionCard({
           </button>
         </div>
       </div>
+      </div> {/* Close the draggable div */}
 
       {expanded && s.tabs && (
         <div className="mt-3 pt-3 border-t border-gray-100">
@@ -120,6 +113,14 @@ export default function SessionCard({
           />
         </div>
       )}
+
+      {/* Share Popup */}
+      <SharePopup
+        isOpen={showSharePopup}
+        onClose={() => setShowSharePopup(false)}
+        sessionName={s.name}
+        shareUrl={`http://localhost:5173/test-share.html?session=${s.id}&name=${encodeURIComponent(s.name)}`}
+      />
     </div>
   )
 }
