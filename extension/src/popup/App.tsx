@@ -162,16 +162,23 @@ export default function App() {
     )
   }, [sessions, query])
 
-  const capture = async (scope: 'WINDOW' | 'ALL_WINDOWS') => {
+  const capture = async (scope: 'WINDOW' | 'ALL_WINDOWS' | 'ACTIVE_TAB') => {
     try {
-      logger.log('📡 Sending message to background script:', {
-        type: scope === 'WINDOW' ? 'CAPTURE_CURRENT_WINDOW' : 'CAPTURE_ALL_WINDOWS'
-      })
+      let messageType: string;
+      if (scope === 'WINDOW') {
+        messageType = 'CAPTURE_CURRENT_WINDOW';
+      } else if (scope === 'ALL_WINDOWS') {
+        messageType = 'CAPTURE_ALL_WINDOWS';
+      } else {
+        messageType = 'CAPTURE_ACTIVE_TAB';
+      }
+
+      logger.log('📡 Sending message to background script:', { type: messageType })
 
       const resp = await new Promise<any>((resolve) => {
         try {
           chrome.runtime.sendMessage({
-            type: scope === 'WINDOW' ? 'CAPTURE_CURRENT_WINDOW' : 'CAPTURE_ALL_WINDOWS'
+            type: messageType
           }, (r) => {
             const err = chrome.runtime.lastError;
             if (err) resolve({ success: false, error: err.message });
@@ -190,13 +197,27 @@ export default function App() {
         return null
       }
 
-      if (resp && resp.tabs && resp.tabs.length > 0) {
-        logger.log('✅ Tabs captured successfully:', resp.tabs)
-        return resp.tabs
+      // Handle different response formats
+      if (scope === 'ACTIVE_TAB') {
+        // Single tab response
+        if (resp.tab) {
+          logger.log('✅ Active tab captured successfully:', resp.tab)
+          return resp.tab
+        } else {
+          setToast({ text: 'No active tab captured' })
+          setTimeout(() => setToast(null), 3000)
+          return null
+        }
       } else {
-        setToast({ text: 'No tabs captured' })
-        setTimeout(() => setToast(null), 3000)
-        return null
+        // Multiple tabs response (existing behavior)
+        if (resp && resp.tabs && resp.tabs.length > 0) {
+          logger.log('✅ Tabs captured successfully:', resp.tabs)
+          return resp.tabs
+        } else {
+          setToast({ text: 'No tabs captured' })
+          setTimeout(() => setToast(null), 3000)
+          return null
+        }
       }
     } catch (error) {
       logger.error('❌ Error capturing tabs:', error)
@@ -321,24 +342,18 @@ export default function App() {
 
   const handleSaveTab = async () => {
     try {
-      logger.log('📱 Capturing tabs...')
-      const tabs = await capture('WINDOW')
-      if (!tabs) return
+      logger.log('📱 Capturing active tab...')
+      const tab = await capture('ACTIVE_TAB')
+      if (!tab) return
 
-      logger.log('📱 Captured tabs:', tabs)
-      if (tabs.length === 0) {
-        logger.log('❌ No tabs captured')
-        setToast({ text: 'No tabs to save' })
-        setTimeout(() => setToast(null), 3000)
-        return
-      }
+      logger.log('📱 Captured active tab:', tab)
 
       // Store the captured tab and show session selection modal
       setCapturedTab({
-        title: tabs[0].title,
-        url: tabs[0].url,
-        tabIndex: tabs[0].tabIndex,
-        windowIndex: tabs[0].windowIndex
+        title: tab.title,
+        url: tab.url,
+        tabIndex: tab.tabIndex,
+        windowIndex: tab.windowIndex
       })
       setShowTabSaveModal(true)
     } catch (error) {

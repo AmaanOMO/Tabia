@@ -107,6 +107,41 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     return true; // keep channel open
   }
 
+  if (msg?.type === 'CAPTURE_ACTIVE_TAB') {
+    console.log('[bg] Capturing active tab...');
+    
+    (async () => {
+      try {
+        const currentWindow = await chrome.windows.getCurrent();
+        const activeTab = await chrome.tabs.query({ 
+          windowId: currentWindow.id, 
+          active: true 
+        });
+        
+        if (activeTab.length === 0) {
+          sendResponse({ success: false, error: 'No active tab found' });
+          return;
+        }
+        
+        const tab = activeTab[0];
+        const tabData = {
+          url: tab.url,
+          title: tab.title,
+          favIconUrl: tab.favIconUrl,
+          tabIndex: tab.index
+        };
+        
+        console.log('[bg] Captured active tab:', tabData);
+        sendResponse({ success: true, tab: tabData });
+      } catch (error) {
+        console.error('[bg] Error capturing active tab:', error);
+        sendResponse({ success: false, error: String(error) });
+      }
+    })();
+    
+    return true; // keep channel open
+  }
+
   if (msg?.type === 'CAPTURE_ALL_WINDOWS') {
     console.log('[bg] Capturing all windows tabs...');
     
