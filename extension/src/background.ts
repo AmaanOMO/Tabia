@@ -15,6 +15,15 @@ chrome.runtime.onInstalled.addListener(() => {
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   console.log('[bg] Received message:', msg.type);
   
+  // Ensure sendResponse is always called to prevent message port errors
+  const safeSendResponse = (response: any) => {
+    try {
+      sendResponse(response);
+    } catch (error) {
+      console.error('[bg] Error sending response:', error);
+    }
+  };
+  
   if (msg?.type === 'START_GOOGLE_OAUTH') {
     console.log('[bg] Starting Google OAuth flow...');
     
@@ -70,11 +79,11 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         console.log('[bg] OAuth completed successfully, sending AUTH_STATE_CHANGED...');
         // Session persisted via chromeStorageAdapter
         chrome.runtime.sendMessage({ type: 'AUTH_STATE_CHANGED' });
-        sendResponse({ ok: true });
+        safeSendResponse({ ok: true });
         console.log('[bg] OAuth flow completed successfully');
       } catch (e: any) {
         console.error('[bg] OAuth error:', e);
-        sendResponse({ ok: false, error: String(e?.message || e) });
+        safeSendResponse({ ok: false, error: String(e?.message || e) });
       }
     })();
 
@@ -97,10 +106,10 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         }));
         
         console.log('[bg] Captured tabs:', tabData);
-        sendResponse({ success: true, tabs: tabData });
+        safeSendResponse({ success: true, tabs: tabData });
       } catch (error) {
         console.error('[bg] Error capturing tabs:', error);
-        sendResponse({ success: false, error: String(error) });
+        safeSendResponse({ success: false, error: String(error) });
       }
     })();
     
@@ -119,7 +128,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         });
         
         if (activeTab.length === 0) {
-          sendResponse({ success: false, error: 'No active tab found' });
+          safeSendResponse({ success: false, error: 'No active tab found' });
           return;
         }
         
@@ -132,10 +141,10 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         };
         
         console.log('[bg] Captured active tab:', tabData);
-        sendResponse({ success: true, tab: tabData });
+        safeSendResponse({ success: true, tab: tabData });
       } catch (error) {
         console.error('[bg] Error capturing active tab:', error);
-        sendResponse({ success: false, error: String(error) });
+        safeSendResponse({ success: false, error: String(error) });
       }
     })();
     
@@ -161,10 +170,10 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         }
         
         console.log('[bg] Captured all tabs:', allTabs);
-        sendResponse({ success: true, tabs: allTabs });
+        safeSendResponse({ success: true, tabs: allTabs });
       } catch (error) {
         console.error('[bg] Error capturing all tabs:', error);
-        sendResponse({ success: false, error: String(error) });
+        safeSendResponse({ success: false, error: String(error) });
       }
     })();
     
@@ -226,10 +235,10 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         const finalTabs = await chrome.tabs.query({ windowId });
         console.log('[bg] FINAL tabs:', finalTabs.map(t => ({ id: t.id, url: t.url, pinned: t.pinned })));
 
-        sendResponse({ success: true });
+        safeSendResponse({ success: true });
       } catch (e: any) {
         console.error('[bg] restore error:', e);
-        sendResponse({ success: false, error: String(e?.message || e) });
+        safeSendResponse({ success: false, error: String(e?.message || e) });
       }
     })();
 
@@ -238,7 +247,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 
   if (msg?.type === 'PING') {
     console.log('[bg] PING received, responding...');
-    sendResponse({ ok: true });
+    safeSendResponse({ ok: true });
     return true;
   }
 });
